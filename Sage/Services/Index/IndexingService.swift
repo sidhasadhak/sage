@@ -244,11 +244,12 @@ final class IndexingService: ObservableObject {
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
 
-        assets.enumerateObjects { [weak self] asset, _, _ in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.upsertPhotoChunk(asset, geocoder: geocoder, dateFormatter: dateFormatter)
-            }
+        // Collect first, then process sequentially — firing concurrent Tasks for every
+        // asset causes hundreds of simultaneous image loads + LLM calls, spiking to OOM.
+        var assetList: [PHAsset] = []
+        assets.enumerateObjects { asset, _, _ in assetList.append(asset) }
+        for asset in assetList {
+            await upsertPhotoChunk(asset, geocoder: geocoder, dateFormatter: dateFormatter)
         }
     }
 
@@ -265,7 +266,7 @@ final class IndexingService: ObservableObject {
             let image = await withCheckedContinuation { continuation in
                 PHImageManager.default().requestImage(
                     for: asset,
-                    targetSize: CGSize(width: 512, height: 512),
+                    targetSize: CGSize(width: 256, height: 256),
                     contentMode: .aspectFit,
                     options: options
                 ) { image, _ in continuation.resume(returning: image) }

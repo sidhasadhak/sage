@@ -51,7 +51,11 @@ final class LLMService {
 
             // GPU cache + weight loading run off the main actor so the UI stays responsive
             let loaded = try await Task.detached(priority: .userInitiated) {
-                MLX.GPU.set(cacheLimit: 20 * 1024 * 1024)
+                // Cap GPU memory at 70% of device RAM to leave headroom for the OS and app.
+                // Without this, MLX can grow unbounded and iOS kills the process.
+                let deviceRAM = ProcessInfo.processInfo.physicalMemory
+                MLX.GPU.set(memoryLimit: Int(Double(deviceRAM) * 0.70))
+                MLX.GPU.set(cacheLimit: 512 * 1024 * 1024) // 512 MB free-block cache
                 // Vision-language models (Gemma 3, Qwen2-VL) must use VLMModelFactory;
                 // LLMModelFactory doesn't register their architectures and will crash.
                 if isVision {
