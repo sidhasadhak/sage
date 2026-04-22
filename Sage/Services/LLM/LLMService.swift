@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import MLX
 import MLXLLM
+import MLXVLM
 import MLXLMCommon
 
 @Observable
@@ -41,14 +42,29 @@ final class LLMService {
         let localURL = localModel.localURL
 
         do {
-            let config = ModelConfiguration(directory: localURL)
+            let isVision = ModelCatalog.isVisionCapable(for: localModel.catalogID)
+            let catalogModel = ModelCatalog.model(for: localModel.catalogID)
+
+            // Gemma 3 requires <end_of_turn> as an extra stop token
+            let extraEOS: Set<String> = catalogModel?.family == "Gemma" ? ["<end_of_turn>"] : []
+            let config = ModelConfiguration(directory: localURL, extraEOSTokens: extraEOS)
+
             // GPU cache + weight loading run off the main actor so the UI stays responsive
             let loaded = try await Task.detached(priority: .userInitiated) {
                 MLX.GPU.set(cacheLimit: 20 * 1024 * 1024)
-                return try await LLMModelFactory.shared.loadContainer(
-                    hub: defaultHubApi,
-                    configuration: config
-                ) { _ in }
+                // Vision-language models (Gemma 3, Qwen2-VL) must use VLMModelFactory;
+                // LLMModelFactory doesn't register their architectures and will crash.
+                if isVision {
+                    return try await VLMModelFactory.shared.loadContainer(
+                        hub: defaultHubApi,
+                        configuration: config
+                    ) { _ in }
+                } else {
+                    return try await LLMModelFactory.shared.loadContainer(
+                        hub: defaultHubApi,
+                        configuration: config
+                    ) { _ in }
+                }
             }.value
             modelContainer = loaded
             loadedModelID = localModel.catalogID
