@@ -139,12 +139,11 @@ final class LLMService {
     }
 
     func complete(prompt: String) async throws -> String {
-        var result = ""
-        _ = try await generate(
+        try await generate(
             systemPrompt: "You are a helpful assistant.",
-            messages: [("user", prompt)]
-        ) { result += $0 }
-        return result
+            messages: [("user", prompt)],
+            onToken: { _ in }
+        )
     }
 
     func generateCaption(for image: UIImage) async throws -> String {
@@ -154,10 +153,12 @@ final class LLMService {
         guard let container = modelContainer else { throw ModelError.noModelSelected }
         guard isVisionCapable else { throw ModelError.loadFailed("Active model does not support vision") }
         guard let ciImage = CIImage(image: image) else { throw ModelError.loadFailed("Could not process image") }
-        let userInput = UserInput(
-            chat: [.user("Describe what you see in this photo. Include the scene, objects, people, colours, location, activities, and mood. Be concise but specific.")],
-            images: [.ciImage(ciImage)]
-        )
+        let userInput = UserInput(chat: [
+            .user(
+                "Describe what you see in this photo. Include the scene, objects, people, colours, location, activities, and mood. Be concise but specific.",
+                images: [.ciImage(ciImage)]
+            )
+        ])
         let params = GenerateParameters(maxTokens: 200, temperature: 0.3, topP: 0.9)
         return try await container.perform { (context: ModelContext) in
             let lmInput = try await context.processor.prepare(input: userInput)
