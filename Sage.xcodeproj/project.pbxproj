@@ -18,6 +18,7 @@
 		AA1E81382F9840A10026DE56 /* CoreLocation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81372F9840A10026DE56 /* CoreLocation.framework */; };
 		AA1E81412F9840FF0026DE56 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = AA1E81402F9840FF0026DE56 /* MLXLLM */; };
 		AA1E81432F9841000026DE56 /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = AA1E81422F9841000026DE56 /* Hub */; };
+		AA1E81462F9841200026DE56 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = AA1E81472F9841200026DE56 /* MLXVLM */; };
 		AA1E81452F9841100026DE56 /* NaturalLanguage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81442F9841100026DE56 /* NaturalLanguage.framework */; };
 /* End PBXBuildFile section */
 
@@ -74,6 +75,7 @@
 				AA1E81452F9841100026DE56 /* NaturalLanguage.framework in Frameworks */,
 				AA1E81412F9840FF0026DE56 /* MLXLLM in Frameworks */,
 				AA1E81432F9841000026DE56 /* Hub in Frameworks */,
+				AA1E81462F9841200026DE56 /* MLXVLM in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -136,6 +138,7 @@
 			packageProductDependencies = (
 				AA1E81402F9840FF0026DE56 /* MLXLLM */,
 				AA1E81422F9841000026DE56 /* Hub */,
+				AA1E81472F9841200026DE56 /* MLXVLM */,
 			);
 			productName = Sage;
 			productReference = AA1E80972F9838B30026DE56 /* Sage.app */;
@@ -428,6 +431,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
 			productName = Hub;
+		};
+		AA1E81472F9841200026DE56 /* MLXVLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = MLXVLM;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
