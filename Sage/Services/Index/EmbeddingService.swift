@@ -53,7 +53,7 @@ actor EmbeddingService {
             return try fastEmbed(text: text)
         }
         if !embedding.hasAvailableAssets {
-            try? await embedding.requestAssets()
+            _ = try? await embedding.requestAssets()
         }
         try embedding.load()
 

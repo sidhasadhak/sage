@@ -132,6 +132,7 @@ struct ModelCard: View {
         case .multilingual: (.orange, "globe")
         case .compact: (.teal, "smallcircle.filled.circle")
         case .reasoning: (.indigo, "lightbulb.fill")
+        case .vision: (.cyan, "eye.fill")
         }
 
         return HStack(spacing: 4) {
@@ -173,7 +174,7 @@ struct ModelCard: View {
             HStack(spacing: 10) {
                 Button(role: .destructive) {
                     container.modelManager.delete(local)
-                    if isActive { Task { await container.llmService.unloadModel() } }
+                    if isActive { container.llmService.unloadModel() }
                 } label: {
                     Image(systemName: "trash")
                         .font(.subheadline)
@@ -188,7 +189,7 @@ struct ModelCard: View {
                 if isActive {
                     Button("Unload") {
                         container.modelManager.deactivate()
-                        Task { await container.llmService.unloadModel() }
+                        container.llmService.unloadModel()
                     }
                     .buttonStyle(SageButtonStyle(filled: false))
                     .controlSize(.small)

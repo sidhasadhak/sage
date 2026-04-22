@@ -20,8 +20,7 @@
     <array>
         <string>UIInterfaceOrientationPortrait</string>
     </array>
-    <key>UIRequiresFullScreen</key>
-    <true/>
+
 
     <!-- Privacy Descriptions -->
     <key>NSPhotoLibraryUsageDescription</key>

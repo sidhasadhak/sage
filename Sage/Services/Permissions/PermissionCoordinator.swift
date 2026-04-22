@@ -12,7 +12,7 @@ final class PermissionCoordinator {
     var contactsStatus: CNAuthorizationStatus = CNContactStore.authorizationStatus(for: .contacts)
     var calendarStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .event)
     var reminderStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .reminder)
-    var microphoneStatus: AVAudioSession.RecordPermission = AVAudioSession.sharedInstance().recordPermission
+    var microphoneStatus: AVAudioApplication.RecordPermission = AVAudioApplication.shared.recordPermission
     var speechStatus: SFSpeechRecognizerAuthorizationStatus = SFSpeechRecognizer.authorizationStatus()
 
     func refreshAll() {
@@ -20,7 +20,7 @@ final class PermissionCoordinator {
         contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
         calendarStatus = EKEventStore.authorizationStatus(for: .event)
         reminderStatus = EKEventStore.authorizationStatus(for: .reminder)
-        microphoneStatus = AVAudioSession.sharedInstance().recordPermission
+        microphoneStatus = AVAudioApplication.shared.recordPermission
         speechStatus = SFSpeechRecognizer.authorizationStatus()
     }
 
@@ -64,11 +64,11 @@ final class PermissionCoordinator {
 
     func requestMicrophone() async {
         await withCheckedContinuation { continuation in
-            AVAudioSession.sharedInstance().requestRecordPermission { _ in
+            AVAudioApplication.requestRecordPermission(completionHandler: { _ in
                 continuation.resume()
-            }
+            })
         }
-        microphoneStatus = AVAudioSession.sharedInstance().recordPermission
+        microphoneStatus = AVAudioApplication.shared.recordPermission
     }
 
     func requestSpeech() async {

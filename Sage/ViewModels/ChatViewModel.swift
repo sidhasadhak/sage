@@ -83,7 +83,6 @@ final class ChatViewModel {
             ) { [weak self] chunk in
                 Task { @MainActor [weak self] in
                     self?.streamingText += chunk
-                    assistantMessage.content = self?.streamingText ?? ""
                 }
             }
 

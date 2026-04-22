@@ -215,10 +215,13 @@ private struct GCalEventList: Decodable {
 extension GoogleCalendarService: ASWebAuthenticationPresentationContextProviding {
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         DispatchQueue.main.sync {
-            UIApplication.shared.connectedScenes
+            let windowScene = UIApplication.shared.connectedScenes
                 .compactMap { $0 as? UIWindowScene }
-                .flatMap { $0.windows }
-                .first { $0.isKeyWindow } ?? ASPresentationAnchor()
+                .first(where: { $0.activationState == .foregroundActive })
+                ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+            return windowScene?.windows.first(where: { $0.isKeyWindow })
+                ?? windowScene.map { UIWindow(windowScene: $0) }
+                ?? UIWindow()
         }
     }
 }
