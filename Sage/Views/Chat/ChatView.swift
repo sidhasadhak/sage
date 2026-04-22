@@ -14,6 +14,10 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             messagesArea
+            if let ids = viewModel?.photoAssetIDs, !ids.isEmpty {
+                PhotoStripView(assetIDs: ids)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             inputBar
         }
         .navigationTitle(viewModel?.messages.isEmpty == false ? "Sage" : "New Chat")
@@ -43,65 +47,29 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(spacing: 2) {
                     if viewModel?.messages.isEmpty == true {
-                        suggestionsView
-                            .padding(.top, 60)
+                        suggestionsView.padding(.top, 60)
                     }
-
                     ForEach(viewModel?.messages ?? [], id: \.id) { message in
-                        MessageBubble(message: message)
-                            .id(message.id)
+                        MessageBubble(message: message).id(message.id)
                     }
-
                     if viewModel?.isGenerating == true && viewModel?.streamingText.isEmpty == false {
-                        StreamingBubble(text: viewModel?.streamingText ?? "")
-                            .id("streaming")
+                        StreamingBubble(text: viewModel?.streamingText ?? "").id("streaming")
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
-            .onChange(of: viewModel?.messages.count) { _, _ in
-                scrollToBottom(proxy: proxy)
-            }
-            .onChange(of: viewModel?.streamingText) { _, _ in
-                scrollToBottom(proxy: proxy)
-            }
+            .onChange(of: viewModel?.messages.count) { _, _ in scrollToBottom(proxy: proxy) }
+            .onChange(of: viewModel?.streamingText) { _, _ in scrollToBottom(proxy: proxy) }
             .onAppear { scrollProxy = proxy }
         }
     }
 
     private var inputBar: some View {
         VStack(spacing: 0) {
-            if let suggestion = viewModel?.reminderSuggestion {
-                HStack(spacing: 12) {
-                    Image(systemName: "bell.fill").foregroundStyle(.orange)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Add to Reminders?").font(.caption).foregroundStyle(.secondary)
-                        Text(suggestion.title).font(Theme.captionFont).lineLimit(1)
-                    }
-                    Spacer()
-                    Button("Add") {
-                        Task {
-                            try? await container.reminderService.createReminder(
-                                title: suggestion.title,
-                                dueDate: suggestion.dueDate
-                            )
-                            viewModel?.dismissReminderSuggestion()
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    Button { viewModel?.dismissReminderSuggestion() } label: {
-                        Image(systemName: "xmark").font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Color.orange.opacity(0.1))
+            if let action = viewModel?.pendingAction {
+                actionBanner(action)
             }
-
             ChatInputBar(
                 text: $inputText,
                 isGenerating: viewModel?.isGenerating ?? false,
@@ -115,9 +83,65 @@ struct ChatView: View {
         }
     }
 
+    @ViewBuilder
+    private func actionBanner(_ action: ChatViewModel.ChatAction) -> some View {
+        switch action {
+        case .createReminder(let title, let dueDate):
+            HStack(spacing: 12) {
+                Image(systemName: "bell.fill").foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Add to Reminders?").font(.caption).foregroundStyle(.secondary)
+                    Text(title).font(Theme.captionFont).lineLimit(1)
+                }
+                Spacer()
+                Button("Add") {
+                    Task {
+                        try? await container.reminderService.createReminder(title: title, dueDate: dueDate)
+                        viewModel?.dismissAction()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(.orange)
+                dismissButton
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(Color.orange.opacity(0.1))
+
+        case .scheduleCalendarEvent(let title, let startDate):
+            HStack(spacing: 12) {
+                Image(systemName: "calendar.badge.plus").foregroundStyle(.blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Add to Calendar?").font(.caption).foregroundStyle(.secondary)
+                    Text(title).font(Theme.captionFont).lineLimit(1)
+                }
+                Spacer()
+                Button("Add") {
+                    Task {
+                        try? await container.calendarEventService.createEvent(title: title, startDate: startDate)
+                        viewModel?.dismissAction()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(.blue)
+                dismissButton
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(Color.blue.opacity(0.1))
+        }
+    }
+
+    private var dismissButton: some View {
+        Button { viewModel?.dismissAction() } label: {
+            Image(systemName: "xmark").font(.caption)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+    }
+
     private var suggestionsView: some View {
         VStack(spacing: 20) {
-            // Show "no model" warning if needed
             if case .noModelSelected = container.llmService.state {
                 noModelWarning
             } else if case .loading(let name) = container.llmService.state {
@@ -126,10 +150,7 @@ struct ChatView: View {
                 Image(systemName: "brain.head.profile")
                     .font(.system(size: 48))
                     .foregroundStyle(Color.accentColor.opacity(0.6))
-
-                Text("What's on your mind?")
-                    .font(Theme.titleFont)
-
+                Text("What's on your mind?").font(Theme.titleFont)
                 VStack(spacing: 8) {
                     ForEach(suggestions, id: \.self) { suggestion in
                         Button(suggestion) {
@@ -138,8 +159,7 @@ struct ChatView: View {
                         }
                         .font(Theme.captionFont)
                         .foregroundStyle(Color.accentColor)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
+                        .padding(.horizontal, 16).padding(.vertical, 8)
                         .background(Color.accentColor.opacity(0.1))
                         .clipShape(Capsule())
                     }
@@ -151,20 +171,12 @@ struct ChatView: View {
 
     private var noModelWarning: some View {
         VStack(spacing: 16) {
-            Image(systemName: "cpu")
-                .font(.system(size: 52))
-                .foregroundStyle(.secondary)
-
-            Text("No model loaded")
-                .font(Theme.titleFont)
-
+            Image(systemName: "cpu").font(.system(size: 52)).foregroundStyle(.secondary)
+            Text("No model loaded").font(Theme.titleFont)
             Text("Go to the Models tab to download a local AI model. Llama 3.2 3B is a great starting point.")
-                .font(Theme.bodyFont)
-                .foregroundStyle(.secondary)
+                .font(Theme.bodyFont).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-
             Button("Open Models") {
-                // Signal parent TabView to switch — handled via notification
                 NotificationCenter.default.post(name: .switchToModelsTab, object: nil)
             }
             .buttonStyle(SageButtonStyle())
@@ -173,11 +185,8 @@ struct ChatView: View {
 
     private func loadingIndicator(name: String) -> some View {
         VStack(spacing: 16) {
-            ProgressView()
-                .scaleEffect(1.4)
-            Text("Loading \(name)…")
-                .font(Theme.bodyFont)
-                .foregroundStyle(.secondary)
+            ProgressView().scaleEffect(1.4)
+            Text("Loading \(name)…").font(Theme.bodyFont).foregroundStyle(.secondary)
         }
     }
 
@@ -201,15 +210,13 @@ struct ChatView: View {
 
 struct StreamingBubble: View {
     let text: String
-
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             SageAvatar()
             VStack(alignment: .leading, spacing: 4) {
                 Text(text.isEmpty ? "..." : text)
                     .font(Theme.bodyFont)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(Theme.aiBubble)
                     .clipShape(BubbleShape(isUser: false))
             }

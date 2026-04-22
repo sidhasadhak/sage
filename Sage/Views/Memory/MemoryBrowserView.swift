@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import EventKit
 
 struct MemoryBrowserView: View {
     @EnvironmentObject var container: AppContainer
@@ -11,14 +12,13 @@ struct MemoryBrowserView: View {
     @State private var viewModel: MemoryViewModel?
     @State private var searchText = ""
     @State private var selectedType: MemoryChunk.SourceType? = nil
-    @State private var isSearching = false
     @State private var selectedNote: Note?
+    @State private var selectedPhotoID: String?
+    @State private var selectedContactID: String?
 
     var displayedChunks: [MemoryChunk] {
         var chunks = allChunks
-        if let type = selectedType {
-            chunks = chunks.filter { $0.sourceType == type }
-        }
+        if let type = selectedType { chunks = chunks.filter { $0.sourceType == type } }
         if !searchText.isEmpty {
             chunks = chunks.filter {
                 $0.content.localizedCaseInsensitiveContains(searchText) ||
@@ -31,30 +31,31 @@ struct MemoryBrowserView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                typeFilterBar
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-
-                if displayedChunks.isEmpty {
-                    emptyState
-                } else {
-                    chunkList
-                }
+                typeFilterBar.padding(.horizontal, 16).padding(.vertical, 8)
+                if displayedChunks.isEmpty { emptyState } else { chunkList }
             }
             .navigationTitle("Memory")
             .searchable(text: $searchText, prompt: "Search your memories")
-            .onChange(of: searchText) { _, query in
-                Task { await viewModel?.search() }
-            }
+            .onChange(of: searchText) { _, _ in Task { await viewModel?.search() } }
         }
         .sheet(item: $selectedNote) { note in
             NoteEditorView(note: note, viewModel: nil)
         }
+        .fullScreenCover(item: Binding(
+            get: { selectedPhotoID.map { IdentifiableString(value: $0) } },
+            set: { selectedPhotoID = $0?.value }
+        )) { item in
+            PhotoViewerView(assetID: item.value)
+        }
+        .sheet(item: Binding(
+            get: { selectedContactID.map { IdentifiableString(value: $0) } },
+            set: { selectedContactID = $0?.value }
+        )) { item in
+            ContactViewerView(contactID: item.value)
+                .ignoresSafeArea()
+        }
         .task {
-            viewModel = MemoryViewModel(
-                searchEngine: container.searchEngine,
-                modelContext: modelContext
-            )
+            viewModel = MemoryViewModel(searchEngine: container.searchEngine, modelContext: modelContext)
         }
     }
 
@@ -65,11 +66,7 @@ struct MemoryBrowserView: View {
                     selectedType = nil
                 }
                 ForEach(MemoryChunk.SourceType.allCases, id: \.self) { type in
-                    FilterChip(
-                        label: type.rawValue.capitalized,
-                        icon: iconFor(type),
-                        isSelected: selectedType == type
-                    ) {
+                    FilterChip(label: type.rawValue.capitalized, icon: iconFor(type), isSelected: selectedType == type) {
                         selectedType = selectedType == type ? nil : type
                     }
                 }
@@ -85,9 +82,7 @@ struct MemoryBrowserView: View {
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                     .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            viewModel?.deleteChunk(chunk)
-                        } label: {
+                        Button(role: .destructive) { viewModel?.deleteChunk(chunk) } label: {
                             Label("Remove", systemImage: "trash")
                         }
                     }
@@ -99,24 +94,33 @@ struct MemoryBrowserView: View {
     private func openChunk(_ chunk: MemoryChunk) {
         switch chunk.sourceType {
         case .photo:
-            if let url = URL(string: "photos-redirect://") {
-                UIApplication.shared.open(url)
-            }
+            // Show the exact photo full-screen in-app
+            selectedPhotoID = chunk.sourceID
+
+        case .contact:
+            // Show the exact contact card in-app
+            selectedContactID = chunk.sourceID
+
         case .event:
-            let interval = Date().timeIntervalSinceReferenceDate
-            if let url = URL(string: "calshow:\(interval)") {
+            // Open Calendar at the event's exact date
+            let store = EKEventStore()
+            if let event = store.event(withIdentifier: chunk.sourceID) {
+                let ts = event.startDate.timeIntervalSinceReferenceDate
+                if let url = URL(string: "calshow:\(ts)") {
+                    UIApplication.shared.open(url)
+                }
+            } else if let url = URL(string: "calshow://") {
                 UIApplication.shared.open(url)
             }
+
         case .reminder:
             if let url = URL(string: "x-apple-reminderkit://") {
                 UIApplication.shared.open(url)
             }
-        case .contact:
-            if let url = URL(string: "addressbook://") {
-                UIApplication.shared.open(url)
-            }
+
         case .note:
             selectedNote = notes.first { $0.memoryChunk?.id == chunk.id }
+
         case .conversation, .email:
             break
         }
@@ -124,20 +128,13 @@ struct MemoryBrowserView: View {
 
     private var emptyState: some View {
         VStack(spacing: 20) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 52))
-                .foregroundStyle(.secondary)
-
+            Image(systemName: "brain.head.profile").font(.system(size: 52)).foregroundStyle(.secondary)
             Text(allChunks.isEmpty ? "No memories indexed yet" : "No results")
-                .font(Theme.titleFont)
-                .foregroundStyle(.secondary)
-
+                .font(Theme.titleFont).foregroundStyle(.secondary)
             if allChunks.isEmpty {
                 Text("Go to Settings to index your photos, contacts, and calendar.")
-                    .font(Theme.bodyFont)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
+                    .font(Theme.bodyFont).foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center).padding(.horizontal, 40)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -156,6 +153,11 @@ struct MemoryBrowserView: View {
     }
 }
 
+private struct IdentifiableString: Identifiable {
+    let value: String
+    var id: String { value }
+}
+
 extension MemoryChunk.SourceType: CaseIterable {
     public static var allCases: [MemoryChunk.SourceType] = [
         .photo, .contact, .event, .reminder, .note, .conversation, .email
@@ -171,13 +173,10 @@ struct FilterChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.caption)
-                Text(label)
-                    .font(Theme.captionFont)
+                Image(systemName: icon).font(.caption)
+                Text(label).font(Theme.captionFont)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 12).padding(.vertical, 6)
             .background(isSelected ? Color.accentColor : Color(.tertiarySystemFill))
             .foregroundStyle(isSelected ? .white : .primary)
             .clipShape(Capsule())

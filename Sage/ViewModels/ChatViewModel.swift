@@ -8,12 +8,13 @@ final class ChatViewModel {
     private(set) var streamingText = ""
     var error: String?
 
-    struct ReminderSuggestion {
-        let title: String
-        let dueDate: Date?
+    enum ChatAction {
+        case createReminder(title: String, dueDate: Date?)
+        case scheduleCalendarEvent(title: String, startDate: Date?)
     }
-    private(set) var reminderSuggestion: ReminderSuggestion?
-    private let reminderService = ReminderCreationService()
+
+    private(set) var pendingAction: ChatAction?
+    private(set) var photoAssetIDs: [String] = []
 
     private let llmService: LLMService
     private let contextBuilder: ContextBuilder
@@ -58,13 +59,14 @@ final class ChatViewModel {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let conversation else { return }
 
-        // Add user message
+        pendingAction = nil
+        photoAssetIDs = []
+
         let userMessage = Message(role: .user, content: trimmed)
         conversation.messages.append(userMessage)
         messages.append(userMessage)
         conversation.updatedAt = Date()
 
-        // Placeholder for assistant
         let assistantMessage = Message(role: .assistant, content: "")
         conversation.messages.append(assistantMessage)
         messages.append(assistantMessage)
@@ -72,10 +74,15 @@ final class ChatViewModel {
         error = nil
 
         do {
-            // Build context from memory index
             let history = messages.dropLast(2).map { $0 }
             let context = await contextBuilder.buildContext(for: trimmed, history: Array(history))
             let chatMessages = contextBuilder.buildMessages(history: Array(history), newUserMessage: trimmed)
+
+            // Surface photo results immediately while LLM generates
+            let photoIDs = context.chunks
+                .filter { $0.sourceType == .photo }
+                .map { $0.sourceID }
+            if !photoIDs.isEmpty { photoAssetIDs = photoIDs }
 
             let response = try await llmService.generate(
                 systemPrompt: context.instructions,
@@ -89,12 +96,9 @@ final class ChatViewModel {
             assistantMessage.content = response
             streamingText = ""
 
-            // Check user's message for reminder intent
-            if let intent = reminderService.parseReminderIntent(from: trimmed) {
-                reminderSuggestion = ReminderSuggestion(title: intent.title, dueDate: intent.dueDate)
-            }
+            // Detect what action the user wants
+            pendingAction = Self.parseIntent(from: trimmed)
 
-            // Index conversation turn for future context retrieval
             let turnContent = "User asked: \(trimmed)\nSage replied: \(response.prefix(300))"
             let chunk = MemoryChunk(
                 sourceType: .conversation,
@@ -104,7 +108,6 @@ final class ChatViewModel {
             )
             modelContext.insert(chunk)
 
-            // Auto-title from first user message
             if conversation.title == "New Conversation" {
                 conversation.title = String(trimmed.prefix(50))
             }
@@ -116,18 +119,54 @@ final class ChatViewModel {
         }
     }
 
-    func dismissReminderSuggestion() { reminderSuggestion = nil }
+    func dismissAction() { pendingAction = nil }
 
-    func stopGeneration() {
-        // MLX generation is not easily cancellable mid-stream without task cancellation;
-        // we cancel the Task that wraps generate() by setting a flag.
-        // For now, generation will complete the current token batch then stop.
-        streamingText = ""
-    }
+    func stopGeneration() { streamingText = "" }
 
     func deleteMessage(_ message: Message) {
         modelContext.delete(message)
         messages.removeAll { $0.id == message.id }
         try? modelContext.save()
+    }
+
+    // MARK: - Intent parsing
+
+    private static func parseIntent(from text: String) -> ChatAction? {
+        let lower = text.lowercased()
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
+        let range = NSRange(text.startIndex..., in: text)
+        let date = detector?.matches(in: text, options: [], range: range).first?.date
+
+        // Calendar event — must check before generic "reminder" phrases
+        let eventPatterns = [
+            "schedule a meeting", "set up a meeting", "book a meeting",
+            "create an event", "add to calendar", "schedule meeting",
+            "book appointment", "create appointment", "set a meeting",
+            "schedule an event", "plan a meeting", "arrange a meeting",
+            "set up a call", "book a call"
+        ]
+        for pattern in eventPatterns where lower.contains(pattern) {
+            let title = extractTitle(from: text, after: pattern) ?? text
+            return .scheduleCalendarEvent(title: String(title.prefix(100)), startDate: date)
+        }
+
+        // Reminder
+        let reminderPatterns = [
+            "remind me to", "remind me about", "reminder to",
+            "don't forget to", "remember to", "add reminder",
+            "set reminder", "set a reminder"
+        ]
+        for pattern in reminderPatterns where lower.contains(pattern) {
+            let title = extractTitle(from: text, after: pattern) ?? text
+            return .createReminder(title: String(title.prefix(100)), dueDate: date)
+        }
+
+        return nil
+    }
+
+    private static func extractTitle(from text: String, after pattern: String) -> String? {
+        guard let range = text.lowercased().range(of: pattern) else { return nil }
+        let after = String(text[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        return after.isEmpty ? nil : after
     }
 }

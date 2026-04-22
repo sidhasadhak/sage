@@ -14,6 +14,7 @@ final class AppContainer: ObservableObject {
     let modelManager: ModelManager
     let googleCalendarService: GoogleCalendarService
     let reminderService: ReminderCreationService
+    let calendarEventService: CalendarEventCreationService
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -45,6 +46,7 @@ final class AppContainer: ObservableObject {
         self.contextBuilder = builder
 
         self.reminderService = ReminderCreationService()
+        self.calendarEventService = CalendarEventCreationService()
     }
 
     func bootstrap() async {
