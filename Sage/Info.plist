@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleName</key>
+    <string>Sage</string>
+    <key>CFBundleDisplayName</key>
+    <string>Sage</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.amitkamlapure.sage</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+
+    <!-- Privacy Descriptions -->
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Sage reads photo metadata (dates, locations) to help you find and remember moments. Photos never leave your device.</string>
+
+    <key>NSContactsUsageDescription</key>
+    <string>Sage reads your contacts to help you remember people in your life. Contact data stays on-device.</string>
+
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Sage reads your calendar events to help you recall meetings and appointments. Calendar data stays on-device.</string>
+
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Sage reads your reminders to help you track tasks and deadlines. Reminder data stays on-device.</string>
+
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Sage uses the microphone to record voice notes. Recordings are stored locally and never uploaded.</string>
+
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Sage uses on-device speech recognition to transcribe voice notes. Transcription happens entirely on your device.</string>
+
+    <!-- App Group for Share Extension -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.amitkamlapure.sage</string>
+    </array>
+
+    <!-- Background Processing Tasks -->
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array>
+        <string>com.sage.app.indexing</string>
+    </array>
+</dict>
+</plist>

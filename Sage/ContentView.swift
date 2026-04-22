@@ -1,24 +1,2 @@
-//
-//  ContentView.swift
-//  Sage
-//
-//  Created by Amit Kamlapure on 22.04.26.
-//
-
-import SwiftUI
-
-struct ContentView: View {
-    var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
-    }
-}
-
-#Preview {
-    ContentView()
-}
+// This file is intentionally blank.
+// The real ContentView is in Views/Root/ContentView.swift

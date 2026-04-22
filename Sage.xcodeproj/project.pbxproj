@@ -6,13 +6,52 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AA1E81282F98404F0026DE56 /* CoreSpotlight.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81272F98404F0026DE56 /* CoreSpotlight.framework */; };
+		AA1E812A2F98405C0026DE56 /* Photos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81292F98405C0026DE56 /* Photos.framework */; };
+		AA1E812C2F98406E0026DE56 /* PhotosUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E812B2F98406E0026DE56 /* PhotosUI.framework */; };
+		AA1E812E2F98407B0026DE56 /* Contacts.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E812D2F98407B0026DE56 /* Contacts.framework */; };
+		AA1E81302F9840810026DE56 /* EventKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E812F2F9840810026DE56 /* EventKit.framework */; };
+		AA1E81322F98408E0026DE56 /* Speech.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81312F98408E0026DE56 /* Speech.framework */; };
+		AA1E81342F9840930026DE56 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81332F9840930026DE56 /* AVFoundation.framework */; };
+		AA1E81362F98409A0026DE56 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81352F98409A0026DE56 /* Accelerate.framework */; };
+		AA1E81382F9840A10026DE56 /* CoreLocation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81372F9840A10026DE56 /* CoreLocation.framework */; };
+		AA1E81412F9840FF0026DE56 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = AA1E81402F9840FF0026DE56 /* MLXLLM */; };
+		AA1E81432F9841000026DE56 /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = AA1E81422F9841000026DE56 /* Hub */; };
+		AA1E81452F9841100026DE56 /* NaturalLanguage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81442F9841100026DE56 /* NaturalLanguage.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		AA1E80972F9838B30026DE56 /* Sage.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sage.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA1E81272F98404F0026DE56 /* CoreSpotlight.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreSpotlight.framework; path = System/Library/Frameworks/CoreSpotlight.framework; sourceTree = SDKROOT; };
+		AA1E81292F98405C0026DE56 /* Photos.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Photos.framework; path = System/Library/Frameworks/Photos.framework; sourceTree = SDKROOT; };
+		AA1E812B2F98406E0026DE56 /* PhotosUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = PhotosUI.framework; path = System/Library/Frameworks/PhotosUI.framework; sourceTree = SDKROOT; };
+		AA1E812D2F98407B0026DE56 /* Contacts.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Contacts.framework; path = System/Library/Frameworks/Contacts.framework; sourceTree = SDKROOT; };
+		AA1E812F2F9840810026DE56 /* EventKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = EventKit.framework; path = System/Library/Frameworks/EventKit.framework; sourceTree = SDKROOT; };
+		AA1E81312F98408E0026DE56 /* Speech.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Speech.framework; path = System/Library/Frameworks/Speech.framework; sourceTree = SDKROOT; };
+		AA1E81332F9840930026DE56 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		AA1E81352F98409A0026DE56 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
+		AA1E81372F9840A10026DE56 /* CoreLocation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreLocation.framework; path = System/Library/Frameworks/CoreLocation.framework; sourceTree = SDKROOT; };
+		AA1E81442F9841100026DE56 /* NaturalLanguage.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NaturalLanguage.framework; path = System/Library/Frameworks/NaturalLanguage.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AA1E81392F9843130026DE56 /* Exceptions for "Sage" folder in "Sage" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				ContentView.swift,
+				Info.plist,
+			);
+			target = AA1E80962F9838B30026DE56 /* Sage */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AA1E80992F9838B30026DE56 /* Sage */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA1E81392F9843130026DE56 /* Exceptions for "Sage" folder in "Sage" target */,
+			);
 			path = Sage;
 			sourceTree = "<group>";
 		};
@@ -23,6 +62,18 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA1E81282F98404F0026DE56 /* CoreSpotlight.framework in Frameworks */,
+				AA1E81362F98409A0026DE56 /* Accelerate.framework in Frameworks */,
+				AA1E81302F9840810026DE56 /* EventKit.framework in Frameworks */,
+				AA1E81322F98408E0026DE56 /* Speech.framework in Frameworks */,
+				AA1E81342F9840930026DE56 /* AVFoundation.framework in Frameworks */,
+				AA1E81382F9840A10026DE56 /* CoreLocation.framework in Frameworks */,
+				AA1E812A2F98405C0026DE56 /* Photos.framework in Frameworks */,
+				AA1E812C2F98406E0026DE56 /* PhotosUI.framework in Frameworks */,
+				AA1E812E2F98407B0026DE56 /* Contacts.framework in Frameworks */,
+				AA1E81452F9841100026DE56 /* NaturalLanguage.framework in Frameworks */,
+				AA1E81412F9840FF0026DE56 /* MLXLLM in Frameworks */,
+				AA1E81432F9841000026DE56 /* Hub in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -34,6 +85,7 @@
 			children = (
 				AA1E80992F9838B30026DE56 /* Sage */,
 				AA1E80982F9838B30026DE56 /* Products */,
+				AA1E81262F983F990026DE56 /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -43,6 +95,23 @@
 				AA1E80972F9838B30026DE56 /* Sage.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		AA1E81262F983F990026DE56 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				AA1E81272F98404F0026DE56 /* CoreSpotlight.framework */,
+				AA1E81292F98405C0026DE56 /* Photos.framework */,
+				AA1E812B2F98406E0026DE56 /* PhotosUI.framework */,
+				AA1E812D2F98407B0026DE56 /* Contacts.framework */,
+				AA1E812F2F9840810026DE56 /* EventKit.framework */,
+				AA1E81312F98408E0026DE56 /* Speech.framework */,
+				AA1E81332F9840930026DE56 /* AVFoundation.framework */,
+				AA1E81352F98409A0026DE56 /* Accelerate.framework */,
+				AA1E81372F9840A10026DE56 /* CoreLocation.framework */,
+				AA1E81442F9841100026DE56 /* NaturalLanguage.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -65,6 +134,8 @@
 			);
 			name = Sage;
 			packageProductDependencies = (
+				AA1E81402F9840FF0026DE56 /* MLXLLM */,
+				AA1E81422F9841000026DE56 /* Hub */,
 			);
 			productName = Sage;
 			productReference = AA1E80972F9838B30026DE56 /* Sage.app */;
@@ -94,6 +165,9 @@
 			);
 			mainGroup = AA1E808E2F9838B30026DE56;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AA1E80982F9838B30026DE56 /* Products */;
 			projectDirPath = "";
@@ -249,10 +323,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2C5X3ST57D;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Sage/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -263,11 +340,10 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sage.app.Sage;
+				PRODUCT_BUNDLE_IDENTIFIER = com.amitkamlapure.sage;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
@@ -280,10 +356,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2C5X3ST57D;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Sage/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -294,11 +373,10 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sage.app.Sage;
+				PRODUCT_BUNDLE_IDENTIFIER = com.amitkamlapure.sage;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
@@ -328,6 +406,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-examples";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.29.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA1E81402F9840FF0026DE56 /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = MLXLLM;
+		};
+		AA1E81422F9841000026DE56 /* Hub */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = Hub;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = AA1E808F2F9838B30026DE56 /* Project object */;
 }
