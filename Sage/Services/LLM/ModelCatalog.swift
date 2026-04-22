@@ -11,6 +11,7 @@ struct CatalogModel: Identifiable, Hashable {
     let quantization: String        // "4-bit"
     let tags: [Tag]
     let minimumRAMGB: Int
+    let isVisionCapable: Bool
 
     enum Tag: String {
         case recommended = "Recommended"
@@ -19,6 +20,7 @@ struct CatalogModel: Identifiable, Hashable {
         case multilingual = "Multilingual"
         case compact = "Compact"
         case reasoning = "Reasoning"
+        case vision = "Vision"
     }
 
     var localDirectoryName: String {
@@ -40,7 +42,8 @@ enum ModelCatalog {
             contextLength: 8192,
             quantization: "4-bit",
             tags: [.fast, .compact],
-            minimumRAMGB: 4
+            minimumRAMGB: 4,
+            isVisionCapable: false
         ),
         CatalogModel(
             id: "mlx-community/SmolLM2-1.7B-Instruct-4bit",
@@ -52,7 +55,8 @@ enum ModelCatalog {
             contextLength: 8192,
             quantization: "4-bit",
             tags: [.fast, .compact],
-            minimumRAMGB: 4
+            minimumRAMGB: 4,
+            isVisionCapable: false
         ),
         CatalogModel(
             id: "mlx-community/Llama-3.2-3B-Instruct-4bit",
@@ -64,7 +68,8 @@ enum ModelCatalog {
             contextLength: 8192,
             quantization: "4-bit",
             tags: [.recommended, .fast],
-            minimumRAMGB: 6
+            minimumRAMGB: 6,
+            isVisionCapable: false
         ),
         CatalogModel(
             id: "mlx-community/gemma-2-2b-it-4bit",
@@ -76,7 +81,8 @@ enum ModelCatalog {
             contextLength: 8192,
             quantization: "4-bit",
             tags: [.fast],
-            minimumRAMGB: 6
+            minimumRAMGB: 6,
+            isVisionCapable: false
         ),
         CatalogModel(
             id: "mlx-community/Phi-3.5-mini-instruct-4bit",
@@ -88,7 +94,8 @@ enum ModelCatalog {
             contextLength: 128000,
             quantization: "4-bit",
             tags: [.reasoning],
-            minimumRAMGB: 6
+            minimumRAMGB: 6,
+            isVisionCapable: false
         ),
         CatalogModel(
             id: "mlx-community/Qwen2.5-3B-Instruct-4bit",
@@ -100,7 +107,8 @@ enum ModelCatalog {
             contextLength: 32768,
             quantization: "4-bit",
             tags: [.multilingual],
-            minimumRAMGB: 6
+            minimumRAMGB: 6,
+            isVisionCapable: false
         ),
         CatalogModel(
             id: "mlx-community/Mistral-7B-Instruct-v0.3-4bit",
@@ -112,7 +120,8 @@ enum ModelCatalog {
             contextLength: 32768,
             quantization: "4-bit",
             tags: [.capable],
-            minimumRAMGB: 8
+            minimumRAMGB: 8,
+            isVisionCapable: false
         ),
         CatalogModel(
             id: "mlx-community/Llama-3.1-8B-Instruct-4bit",
@@ -124,11 +133,42 @@ enum ModelCatalog {
             contextLength: 131072,
             quantization: "4-bit",
             tags: [.capable, .reasoning],
-            minimumRAMGB: 8
+            minimumRAMGB: 8,
+            isVisionCapable: false
+        ),
+        CatalogModel(
+            id: "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+            displayName: "Qwen2-VL · 2B",
+            family: "Qwen",
+            description: "Vision-language model. Understands photos and can describe scenes, people, and objects.",
+            parameterCount: "2B",
+            sizeGB: 2.0,
+            contextLength: 32768,
+            quantization: "4-bit",
+            tags: [.recommended, .vision],
+            minimumRAMGB: 6,
+            isVisionCapable: true
+        ),
+        CatalogModel(
+            id: "mlx-community/Qwen2-VL-7B-Instruct-4bit",
+            displayName: "Qwen2-VL · 7B",
+            family: "Qwen",
+            description: "Powerful vision-language model. Best photo understanding quality. Requires 8GB RAM.",
+            parameterCount: "7B",
+            sizeGB: 4.5,
+            contextLength: 32768,
+            quantization: "4-bit",
+            tags: [.capable, .vision],
+            minimumRAMGB: 8,
+            isVisionCapable: true
         ),
     ]
 
     static func model(for id: String) -> CatalogModel? {
         all.first { $0.id == id }
+    }
+
+    static func isVisionCapable(for catalogID: String) -> Bool {
+        all.first { $0.id == catalogID }?.isVisionCapable ?? false
     }
 }

@@ -10,6 +10,7 @@ struct NotesListView: View {
     @State private var searchText = ""
     @State private var showNewNote = false
     @State private var showVoiceRecorder = false
+    @State private var showNewChecklist = false
 
     var filteredNotes: [Note] {
         if searchText.isEmpty { return notes }
@@ -37,6 +38,9 @@ struct NotesListView: View {
             }
             .sheet(isPresented: $showVoiceRecorder) {
                 VoiceNoteRecorderView(viewModel: viewModel)
+            }
+            .sheet(isPresented: $showNewChecklist) {
+                ChecklistEditorView(note: nil, viewModel: viewModel)
             }
         }
         .task {
@@ -103,6 +107,13 @@ struct NotesListView: View {
             }
 
             Button {
+                showNewChecklist = true
+            } label: {
+                Image(systemName: "checklist")
+                    .fontWeight(.semibold)
+            }
+
+            Button {
                 showNewNote = true
             } label: {
                 Image(systemName: "square.and.pencil")
@@ -120,6 +131,11 @@ struct NoteCard: View {
             HStack {
                 if note.isVoiceNote {
                     Image(systemName: "waveform")
+                        .font(.caption)
+                        .foregroundStyle(Color.accentColor)
+                }
+                if note.isChecklist {
+                    Image(systemName: "checklist")
                         .font(.caption)
                         .foregroundStyle(Color.accentColor)
                 }

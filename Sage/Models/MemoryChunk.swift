@@ -34,6 +34,23 @@ final class MemoryChunk {
         self.isSpotlightIndexed = false
     }
 
+    var openURL: URL? {
+        switch sourceType {
+        case .photo:
+            return URL(string: "photos-redirect://")
+        case .event:
+            return URL(string: "calshow://")
+        case .reminder:
+            return URL(string: "x-apple-reminderkit://")
+        case .contact:
+            return URL(string: "addressbook://")
+        case .note, .conversation, .email:
+            return nil
+        }
+    }
+
+    var photoAssetIdentifier: String? { sourceType == .photo ? sourceID : nil }
+
     var icon: String {
         switch sourceType {
         case .photo: return "photo"

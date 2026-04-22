@@ -56,6 +56,20 @@ final class NotesViewModel {
         return note
     }
 
+    func createChecklist(title: String, items: [ChecklistItem]) {
+        let note = Note(title: title, isVoiceNote: false)
+        note.isChecklist = true
+        note.checklistData = try? JSONEncoder().encode(items)
+        note.body = items.map { ($0.isDone ? "☑ " : "☐ ") + $0.text }.joined(separator: "\n")
+        modelContext.insert(note)
+        try? modelContext.save()
+        Task { await indexNote(note) }
+    }
+
+    func indexNote(_ note: Note) async {
+        await indexingService.indexNote(note)
+    }
+
     func deleteNote(_ note: Note) {
         if let path = note.audioFileRelativePath {
             let docsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

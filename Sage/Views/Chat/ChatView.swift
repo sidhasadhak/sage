@@ -71,15 +71,47 @@ struct ChatView: View {
     }
 
     private var inputBar: some View {
-        ChatInputBar(
-            text: $inputText,
-            isGenerating: viewModel?.isGenerating ?? false,
-            isFocused: $isInputFocused
-        ) {
-            let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return }
-            inputText = ""
-            Task { await viewModel?.send(text) }
+        VStack(spacing: 0) {
+            if let suggestion = viewModel?.reminderSuggestion {
+                HStack(spacing: 12) {
+                    Image(systemName: "bell.fill").foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Add to Reminders?").font(.caption).foregroundStyle(.secondary)
+                        Text(suggestion.title).font(Theme.captionFont).lineLimit(1)
+                    }
+                    Spacer()
+                    Button("Add") {
+                        Task {
+                            try? await container.reminderService.createReminder(
+                                title: suggestion.title,
+                                dueDate: suggestion.dueDate
+                            )
+                            viewModel?.dismissReminderSuggestion()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    Button { viewModel?.dismissReminderSuggestion() } label: {
+                        Image(systemName: "xmark").font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color.orange.opacity(0.1))
+            }
+
+            ChatInputBar(
+                text: $inputText,
+                isGenerating: viewModel?.isGenerating ?? false,
+                isFocused: $isInputFocused
+            ) {
+                let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return }
+                inputText = ""
+                Task { await viewModel?.send(text) }
+            }
         }
     }
 

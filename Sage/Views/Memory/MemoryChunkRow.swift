@@ -2,8 +2,10 @@ import SwiftUI
 
 struct MemoryChunkRow: View {
     let chunk: MemoryChunk
+    var onTap: (() -> Void)? = nil
 
     var body: some View {
+        Button(action: { onTap?() }) {
         HStack(alignment: .top, spacing: 12) {
             // Source icon
             RoundedRectangle(cornerRadius: 8)
@@ -54,6 +56,8 @@ struct MemoryChunkRow: View {
         .padding(12)
         .background(Theme.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius))
+        }
+        .buttonStyle(.plain)
     }
 
     private var iconColor: Color {

@@ -51,5 +51,18 @@
     <array>
         <string>com.sage.app.indexing</string>
     </array>
+
+    <!-- Google OAuth callback URL scheme -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.amitkamlapure.sage.oauth</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>com.amitkamlapure.sage</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

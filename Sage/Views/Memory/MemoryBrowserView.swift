@@ -1,15 +1,18 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct MemoryBrowserView: View {
     @EnvironmentObject var container: AppContainer
     @Environment(\.modelContext) var modelContext
     @Query(sort: \MemoryChunk.updatedAt, order: .reverse) var allChunks: [MemoryChunk]
+    @Query var notes: [Note]
 
     @State private var viewModel: MemoryViewModel?
     @State private var searchText = ""
     @State private var selectedType: MemoryChunk.SourceType? = nil
     @State private var isSearching = false
+    @State private var selectedNote: Note?
 
     var displayedChunks: [MemoryChunk] {
         var chunks = allChunks
@@ -44,6 +47,9 @@ struct MemoryBrowserView: View {
                 Task { await viewModel?.search() }
             }
         }
+        .sheet(item: $selectedNote) { note in
+            NoteEditorView(note: note, viewModel: nil)
+        }
         .task {
             viewModel = MemoryViewModel(
                 searchEngine: container.searchEngine,
@@ -74,7 +80,7 @@ struct MemoryBrowserView: View {
     private var chunkList: some View {
         List {
             ForEach(displayedChunks) { chunk in
-                MemoryChunkRow(chunk: chunk)
+                MemoryChunkRow(chunk: chunk, onTap: { openChunk(chunk) })
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
@@ -88,6 +94,32 @@ struct MemoryBrowserView: View {
             }
         }
         .listStyle(.plain)
+    }
+
+    private func openChunk(_ chunk: MemoryChunk) {
+        switch chunk.sourceType {
+        case .photo:
+            if let url = URL(string: "photos-redirect://") {
+                UIApplication.shared.open(url)
+            }
+        case .event:
+            let interval = Date().timeIntervalSinceReferenceDate
+            if let url = URL(string: "calshow:\(interval)") {
+                UIApplication.shared.open(url)
+            }
+        case .reminder:
+            if let url = URL(string: "x-apple-reminderkit://") {
+                UIApplication.shared.open(url)
+            }
+        case .contact:
+            if let url = URL(string: "addressbook://") {
+                UIApplication.shared.open(url)
+            }
+        case .note:
+            selectedNote = notes.first { $0.memoryChunk?.id == chunk.id }
+        case .conversation, .email:
+            break
+        }
     }
 
     private var emptyState: some View {

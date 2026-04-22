@@ -16,6 +16,8 @@ final class IndexingService: ObservableObject {
     private let embeddingService = EmbeddingService.shared
     private let searchEngine: SemanticSearchEngine
     private let spotlightService: SpotlightService
+    private weak var llmService: LLMService?
+    private weak var googleCalendarService: GoogleCalendarService?
 
     private enum DeltaKeys {
         static let photos   = "delta.lastPhotosIndexedAt"
@@ -23,10 +25,12 @@ final class IndexingService: ObservableObject {
         static let calendar = "delta.lastCalendarIndexedAt"
     }
 
-    init(modelContext: ModelContext, searchEngine: SemanticSearchEngine, spotlightService: SpotlightService) {
+    init(modelContext: ModelContext, searchEngine: SemanticSearchEngine, spotlightService: SpotlightService, llmService: LLMService? = nil, googleCalendarService: GoogleCalendarService? = nil) {
         self.modelContext = modelContext
         self.searchEngine = searchEngine
         self.spotlightService = spotlightService
+        self.llmService = llmService
+        self.googleCalendarService = googleCalendarService
         lastIndexedAt = UserDefaults.standard.object(forKey: "lastIndexedAt") as? Date
     }
 
@@ -135,6 +139,14 @@ final class IndexingService: ObservableObject {
                 }
             }
         }
+
+        // Google Calendar
+        if let gcal = googleCalendarService {
+            let gcalEvents = await gcal.syncedEvents(from: start, to: end)
+            for gcalEvent in gcalEvents {
+                await upsertGCalEventChunk(gcalEvent)
+            }
+        }
     }
 
     private func upsertEventChunk(_ event: EKEvent) async {
@@ -185,6 +197,36 @@ final class IndexingService: ObservableObject {
         )
     }
 
+    private func upsertGCalEventChunk(_ event: GCalEvent) async {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+
+        var parts = ["Event: \(event.summary ?? "Untitled")"]
+        if let date = event.start?.resolved {
+            parts.append("Date: \(formatter.string(from: date))")
+        }
+        if let location = event.location, !location.isEmpty {
+            parts.append("Location: \(location)")
+        }
+        if let description = event.description, !description.isEmpty {
+            parts.append("Notes: \(description.prefix(200))")
+        }
+
+        let content = parts.joined(separator: ". ")
+        let keywords = [event.summary, event.location]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+
+        await upsertChunk(
+            sourceType: .event,
+            sourceID: "gcal-\(event.id)",
+            content: content,
+            keywords: keywords,
+            quality: .fast
+        )
+    }
+
     // MARK: - Photos
 
     func indexPhotos() async {
@@ -212,7 +254,28 @@ final class IndexingService: ObservableObject {
 
     private func upsertPhotoChunk(_ asset: PHAsset, geocoder: CLGeocoder, dateFormatter: DateFormatter) async {
         let date = asset.creationDate.map { dateFormatter.string(from: $0) } ?? "unknown date"
-        var parts = ["Photo taken on \(date)"]
+
+        // Try vision captioning if a vision model is active
+        var caption: String? = nil
+        if let llm = llmService, llm.isVisionCapable {
+            let options = PHImageRequestOptions()
+            options.isSynchronous = false
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = false
+            let image = await withCheckedContinuation { continuation in
+                PHImageManager.default().requestImage(
+                    for: asset,
+                    targetSize: CGSize(width: 512, height: 512),
+                    contentMode: .aspectFit,
+                    options: options
+                ) { image, _ in continuation.resume(returning: image) }
+            }
+            if let image {
+                caption = try? await llm.generateCaption(for: image)
+            }
+        }
+
+        var parts = [caption ?? "Photo taken on \(date)"]
 
         if let location = asset.location {
             do {
@@ -227,11 +290,14 @@ final class IndexingService: ObservableObject {
         }
 
         let content = parts.joined(separator: " ")
+        var keywords: [String] = []
+        if let caption { keywords.append(caption) }
+
         await upsertChunk(
             sourceType: .photo,
             sourceID: asset.localIdentifier,
             content: content,
-            keywords: [],
+            keywords: keywords,
             quality: .fast
         )
     }

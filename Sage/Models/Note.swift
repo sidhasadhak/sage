@@ -9,6 +9,8 @@ final class Note {
     var createdAt: Date
     var updatedAt: Date
     var isVoiceNote: Bool
+    var isChecklist: Bool
+    var checklistData: Data?
     var audioFileRelativePath: String?
     var transcription: String?
 
@@ -20,6 +22,8 @@ final class Note {
         self.title = title
         self.body = body
         self.isVoiceNote = isVoiceNote
+        self.isChecklist = false
+        self.checklistData = nil
         self.createdAt = Date()
         self.updatedAt = Date()
     }

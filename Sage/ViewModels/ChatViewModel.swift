@@ -8,6 +8,13 @@ final class ChatViewModel {
     private(set) var streamingText = ""
     var error: String?
 
+    struct ReminderSuggestion {
+        let title: String
+        let dueDate: Date?
+    }
+    private(set) var reminderSuggestion: ReminderSuggestion?
+    private let reminderService = ReminderCreationService()
+
     private let llmService: LLMService
     private let contextBuilder: ContextBuilder
     private let indexingService: IndexingService
@@ -83,6 +90,11 @@ final class ChatViewModel {
             assistantMessage.content = response
             streamingText = ""
 
+            // Check user's message for reminder intent
+            if let intent = reminderService.parseReminderIntent(from: trimmed) {
+                reminderSuggestion = ReminderSuggestion(title: intent.title, dueDate: intent.dueDate)
+            }
+
             // Index conversation turn for future context retrieval
             let turnContent = "User asked: \(trimmed)\nSage replied: \(response.prefix(300))"
             let chunk = MemoryChunk(
@@ -104,6 +116,8 @@ final class ChatViewModel {
             self.error = error.localizedDescription
         }
     }
+
+    func dismissReminderSuggestion() { reminderSuggestion = nil }
 
     func stopGeneration() {
         // MLX generation is not easily cancellable mid-stream without task cancellation;

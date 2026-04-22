@@ -12,6 +12,8 @@ final class AppContainer: ObservableObject {
     let contextBuilder: ContextBuilder
     let llmService: LLMService
     let modelManager: ModelManager
+    let googleCalendarService: GoogleCalendarService
+    let reminderService: ReminderCreationService
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -25,17 +27,24 @@ final class AppContainer: ObservableObject {
         let spotlight = SpotlightService()
         self.spotlightService = spotlight
 
+        self.llmService = LLMService()
+        self.modelManager = ModelManager(modelContext: context)
+
+        let gcal = GoogleCalendarService()
+        self.googleCalendarService = gcal
+
         self.indexingService = IndexingService(
             modelContext: context,
             searchEngine: search,
-            spotlightService: spotlight
+            spotlightService: spotlight,
+            llmService: self.llmService,
+            googleCalendarService: gcal
         )
 
         let builder = ContextBuilder(searchEngine: search)
         self.contextBuilder = builder
 
-        self.llmService = LLMService()
-        self.modelManager = ModelManager(modelContext: context)
+        self.reminderService = ReminderCreationService()
     }
 
     func bootstrap() async {

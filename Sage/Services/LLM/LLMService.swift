@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import MLX
 import MLXLLM
 import MLXLMCommon
@@ -71,6 +72,11 @@ final class LLMService {
 
     var isGenerating: Bool { state == .generating }
 
+    var isVisionCapable: Bool {
+        guard let id = loadedModelID else { return false }
+        return ModelCatalog.isVisionCapable(for: id)
+    }
+
     // MARK: - Generation
 
     func generate(
@@ -139,5 +145,29 @@ final class LLMService {
             messages: [("user", prompt)]
         ) { result += $0 }
         return result
+    }
+
+    func generateCaption(for image: UIImage) async throws -> String {
+        #if targetEnvironment(simulator)
+        return "Photo captured on device"
+        #else
+        guard let container = modelContainer else { throw ModelError.noModelSelected }
+        guard isVisionCapable else { throw ModelError.loadFailed("Active model does not support vision") }
+        guard let ciImage = CIImage(image: image) else { throw ModelError.loadFailed("Could not process image") }
+        let userInput = UserInput(
+            chat: [.user("Describe what you see in this photo. Include the scene, objects, people, colours, location, activities, and mood. Be concise but specific.")],
+            images: [.ciImage(ciImage)]
+        )
+        let params = GenerateParameters(maxTokens: 200, temperature: 0.3, topP: 0.9)
+        return try await container.perform { (context: ModelContext) in
+            let lmInput = try await context.processor.prepare(input: userInput)
+            let stream = try MLXLMCommon.generate(input: lmInput, parameters: params, context: context)
+            var output = ""
+            for await generation in stream {
+                if let chunk = generation.chunk { output += chunk }
+            }
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        #endif
     }
 }
