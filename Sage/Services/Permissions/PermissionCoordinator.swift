@@ -12,7 +12,7 @@ final class PermissionCoordinator {
     var contactsStatus: CNAuthorizationStatus = CNContactStore.authorizationStatus(for: .contacts)
     var calendarStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .event)
     var reminderStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .reminder)
-    var microphoneStatus: AVAudioApplication.RecordPermission = AVAudioApplication.shared.recordPermission
+    var microphoneStatus: AVAudioSession.RecordPermission = AVAudioApplication.shared.recordPermission
     var speechStatus: SFSpeechRecognizerAuthorizationStatus = SFSpeechRecognizer.authorizationStatus()
 
     func refreshAll() {
