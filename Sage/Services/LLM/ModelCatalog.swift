@@ -137,6 +137,32 @@ enum ModelCatalog {
             isVisionCapable: false
         ),
         CatalogModel(
+            id: "mlx-community/gemma-3-4b-it-qat-4bit",
+            displayName: "Gemma 3 · 4B Vision",
+            family: "Gemma",
+            description: "Google's Gemma 3 with full vision support. Understands photos, charts, and documents. Great balance of speed and quality.",
+            parameterCount: "4B",
+            sizeGB: 3.0,
+            contextLength: 131072,
+            quantization: "4-bit QAT",
+            tags: [.recommended, .vision],
+            minimumRAMGB: 6,
+            isVisionCapable: true
+        ),
+        CatalogModel(
+            id: "mlx-community/gemma-3-12b-it-4bit",
+            displayName: "Gemma 3 · 12B Vision",
+            family: "Gemma",
+            description: "Google's larger Gemma 3 vision model. Superior photo understanding and reasoning. Requires iPhone 15 Pro or later.",
+            parameterCount: "12B",
+            sizeGB: 7.8,
+            contextLength: 131072,
+            quantization: "4-bit",
+            tags: [.capable, .vision],
+            minimumRAMGB: 12,
+            isVisionCapable: true
+        ),
+        CatalogModel(
             id: "mlx-community/Qwen2-VL-2B-Instruct-4bit",
             displayName: "Qwen2-VL · 2B",
             family: "Qwen",
