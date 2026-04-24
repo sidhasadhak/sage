@@ -448,6 +448,9 @@ struct MemoryBrowserView: View {
         autoExpandMostRecent()
     }
 
+    /// Unified tap handler forwarded from both CalendarMemoryView and the list.
+    private func handleChunkTap(_ chunk: MemoryChunk) { openChunk(chunk) }
+
     private func openChunk(_ chunk: MemoryChunk) {
         switch chunk.sourceType {
         case .photo:
