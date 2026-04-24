@@ -262,11 +262,10 @@ final class LLMService {
                let data = String(output[start...end]).data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let raw = json["entities"] as? [String] {
-                return raw
+                let entities = raw
                     .map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { $0.contains(":") && $0.count < 60 }
-                    .prefix(5)
-                    .map(String.init)
+                return Array(entities.prefix(5))
             }
         } catch {}
         return []
