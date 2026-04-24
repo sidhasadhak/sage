@@ -22,6 +22,9 @@ struct MemoryBrowserView: View {
     @State private var expandedWeeks: Set<String> = []
     @State private var expandedDays: Set<String> = []
 
+    /// Calendar is the default view; user can switch to the hierarchical list.
+    @State private var showCalendar = true
+
     // MARK: - Sort key
 
     enum SortKey: String, CaseIterable, Identifiable {
@@ -206,16 +209,29 @@ struct MemoryBrowserView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                typeFilterBar
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                if filteredChunks.isEmpty { emptyState } else { chunkList }
+                if showCalendar {
+                    CalendarMemoryView(chunks: allChunks, onChunkTap: handleChunkTap)
+                } else {
+                    typeFilterBar
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                    if filteredChunks.isEmpty { emptyState } else { chunkList }
+                }
             }
             .navigationTitle("Memory")
-            .searchable(text: $searchText, prompt: "Search your memories")
+            .searchable(text: showCalendar ? .constant("") : $searchText, prompt: "Search your memories")
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    // Calendar / List toggle
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { showCalendar.toggle() }
+                    } label: {
+                        Image(systemName: showCalendar ? "list.bullet" : "calendar")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    sortMenu
+                    if !showCalendar { sortMenu }
                 }
             }
             .onChange(of: searchText) { _, _ in Task { await viewModel?.search() } }
@@ -429,6 +445,9 @@ struct MemoryBrowserView: View {
         expandedDays.removeAll()
         autoExpandMostRecent()
     }
+
+    /// Unified tap handler used by both the calendar and list views.
+    private func handleChunkTap(_ chunk: MemoryChunk) { openChunk(chunk) }
 
     private func openChunk(_ chunk: MemoryChunk) {
         switch chunk.sourceType {

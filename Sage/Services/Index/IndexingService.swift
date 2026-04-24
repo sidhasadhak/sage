@@ -75,6 +75,13 @@ final class IndexingService: ObservableObject {
         await indexContacts()
         await indexCalendar()
         await indexPhotos()
+
+        // Knowledge graph: entity extraction pass (only when feature is enabled).
+        // Runs after primary indexing so it never slows down the core data pass.
+        let graphEnabled = UserDefaults.standard.bool(forKey: "knowledge_graph_enabled")
+        if graphEnabled {
+            await buildEntityGraph()
+        }
     }
 
     // Removes all cached chunks of a given type so they'll be re-indexed on the next run.
@@ -439,6 +446,29 @@ final class IndexingService: ObservableObject {
         try? modelContext.save()
         indexedCount += 1
         return chunk
+    }
+
+    // MARK: - Knowledge Graph
+
+    /// Iterates chunks that have no entities yet and extracts them via the LLM.
+    /// Processes in small batches to stay memory-friendly.
+    /// Skips silently when the LLM is not ready.
+    private func buildEntityGraph() async {
+        guard let llm = llmService, llm.isReady else { return }
+        let descriptor = FetchDescriptor<MemoryChunk>()
+        guard let chunks = try? modelContext.fetch(descriptor) else { return }
+        let pending = chunks.filter { $0.entities == nil }
+        let batchSize = 20
+        for batch in stride(from: 0, to: pending.count, by: batchSize) {
+            let slice = Array(pending[batch..<min(batch + batchSize, pending.count)])
+            for chunk in slice {
+                let entities = await llm.extractEntities(from: chunk.content)
+                if !entities.isEmpty {
+                    chunk.entities = entities
+                }
+            }
+            try? modelContext.save()
+        }
     }
 
     // MARK: - Load Cache
