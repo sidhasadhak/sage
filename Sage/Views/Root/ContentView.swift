@@ -4,6 +4,8 @@ import SwiftData
 struct ContentView: View {
     @EnvironmentObject var container: AppContainer
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("sage_user_name") private var userName: String = ""
+    @State private var showNameSetup = false
     @State private var selectedTab = 0
     @State private var evictionTask: Task<Void, Never>?
 
@@ -30,11 +32,21 @@ struct ContentView: View {
                 .tag(4)
         }
         .tint(.accentColor)
+        .sheet(isPresented: $showNameSetup) {
+            UserNameSetupView(userName: $userName)
+        }
         .task {
             await container.bootstrap()
+            if userName.isEmpty { showNameSetup = true }
+            await container.loadActiveModelIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .switchToModelsTab)) { _ in
             selectedTab = 3
+        }
+        .onChange(of: selectedTab) { _, tab in
+            if tab == 0 {
+                Task { await container.loadActiveModelIfNeeded() }
+            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {

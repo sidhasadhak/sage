@@ -4,10 +4,20 @@ struct ChatInputBar: View {
     @Binding var text: String
     let isGenerating: Bool
     var isFocused: FocusState<Bool>.Binding
+    var onVoiceInput: (() -> Void)? = nil
     let onSend: () -> Void
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 12) {
+        HStack(alignment: .bottom, spacing: 8) {
+            // Mic button
+            if let onVoiceInput {
+                Button(action: onVoiceInput) {
+                    Image(systemName: "mic.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+
             TextField("Message Sage…", text: $text, axis: .vertical)
                 .font(Theme.bodyFont)
                 .lineLimit(1...6)

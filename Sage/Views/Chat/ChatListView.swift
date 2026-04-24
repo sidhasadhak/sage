@@ -8,6 +8,11 @@ struct ChatListView: View {
 
     @State private var selectedConversation: Conversation?
     @State private var showingChat = false
+    @State private var showVoiceCapture = false
+
+    // Tracks whether the cold-start voice capture has already been shown
+    // this app session. Static so it survives tab switches / view re-creation.
+    private static var coldStartCaptureShown = false
 
     var body: some View {
         NavigationStack {
@@ -33,6 +38,22 @@ struct ChatListView: View {
             .navigationDestination(isPresented: $showingChat) {
                 ChatView(conversation: selectedConversation)
                     .environmentObject(container)
+            }
+            .sheet(isPresented: $showVoiceCapture, onDismiss: {
+                // After voice capture (saved or skipped) open a fresh chat
+                selectedConversation = nil
+                showingChat = true
+            }) {
+                VoiceMemoryCaptureView()
+                    .environmentObject(container)
+            }
+            .task {
+                // Only show the voice capture sheet on the very first appearance
+                // of this app session (cold start). Tab switches re-trigger .task
+                // so we guard with a static flag.
+                guard !ChatListView.coldStartCaptureShown else { return }
+                ChatListView.coldStartCaptureShown = true
+                showVoiceCapture = true
             }
         }
     }

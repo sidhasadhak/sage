@@ -10,6 +10,8 @@ struct ChatView: View {
     @State private var inputText = ""
     @FocusState private var isInputFocused: Bool
     @State private var scrollProxy: ScrollViewProxy?
+    @State private var actionError: String?
+    @State private var showVoiceInput = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +31,21 @@ struct ChatView: View {
                         .foregroundStyle(.red)
                 }
             }
+        }
+        .alert("Couldn't save", isPresented: Binding(
+            get: { actionError != nil },
+            set: { if !$0 { actionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { actionError = nil }
+        } message: {
+            Text(actionError ?? "")
+        }
+        .sheet(isPresented: $showVoiceInput) {
+            ChatVoiceInputSheet { transcription in
+                inputText = transcription
+                isInputFocused = true
+            }
+            .environmentObject(container)
         }
         .task {
             let vm = ChatViewModel(
@@ -73,7 +90,8 @@ struct ChatView: View {
             ChatInputBar(
                 text: $inputText,
                 isGenerating: viewModel?.isGenerating ?? false,
-                isFocused: $isInputFocused
+                isFocused: $isInputFocused,
+                onVoiceInput: { showVoiceInput = true }
             ) {
                 let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { return }
@@ -96,8 +114,12 @@ struct ChatView: View {
                 Spacer()
                 Button("Add") {
                     Task {
-                        try? await container.reminderService.createReminder(title: title, dueDate: dueDate)
-                        viewModel?.dismissAction()
+                        do {
+                            try await container.reminderService.createReminder(title: title, dueDate: dueDate)
+                            viewModel?.dismissAction()
+                        } catch {
+                            actionError = error.localizedDescription
+                        }
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -118,8 +140,12 @@ struct ChatView: View {
                 Spacer()
                 Button("Add") {
                     Task {
-                        try? await container.calendarEventService.createEvent(title: title, startDate: startDate)
-                        viewModel?.dismissAction()
+                        do {
+                            try await container.calendarEventService.createEvent(title: title, startDate: startDate)
+                            viewModel?.dismissAction()
+                        } catch {
+                            actionError = error.localizedDescription
+                        }
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -147,26 +173,49 @@ struct ChatView: View {
             } else if case .loading(let name) = container.llmService.state {
                 loadingIndicator(name: name)
             } else {
-                Image(systemName: "brain.head.profile")
-                    .font(.system(size: 48))
-                    .foregroundStyle(Color.accentColor.opacity(0.6))
-                Text("What's on your mind?").font(Theme.titleFont)
-                VStack(spacing: 8) {
-                    ForEach(suggestions, id: \.self) { suggestion in
-                        Button(suggestion) {
-                            inputText = suggestion
-                            isInputFocused = true
-                        }
-                        .font(Theme.captionFont)
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.horizontal, 16).padding(.vertical, 8)
-                        .background(Color.accentColor.opacity(0.1))
-                        .clipShape(Capsule())
-                    }
-                }
+                voiceFirstEmptyState
             }
         }
         .padding(.horizontal, 32)
+    }
+
+    private var voiceFirstEmptyState: some View {
+        VStack(spacing: 24) {
+            Button {
+                showVoiceInput = true
+            } label: {
+                ZStack {
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.12))
+                        .frame(width: 100, height: 100)
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.22))
+                        .frame(width: 76, height: 76)
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 36))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .buttonStyle(.plain)
+
+            Text("Tap to speak")
+                .font(Theme.titleFont)
+                .foregroundStyle(.primary)
+
+            VStack(spacing: 8) {
+                ForEach(suggestions, id: \.self) { suggestion in
+                    Button(suggestion) {
+                        inputText = suggestion
+                        isInputFocused = true
+                    }
+                    .font(Theme.captionFont)
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(Color.accentColor.opacity(0.1))
+                    .clipShape(Capsule())
+                }
+            }
+        }
     }
 
     private var noModelWarning: some View {
@@ -207,6 +256,7 @@ struct ChatView: View {
         }
     }
 }
+
 
 struct StreamingBubble: View {
     let text: String

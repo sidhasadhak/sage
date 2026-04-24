@@ -63,7 +63,7 @@ final class GoogleCalendarService: NSObject {
         let callbackScheme = redirectScheme
 
         let code = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-            let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: callbackScheme) { url, err in
+            let handler: (URL?, Error?) -> Void = { url, err in
                 if let err { continuation.resume(throwing: err); return }
                 guard let url,
                       let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -72,6 +72,21 @@ final class GoogleCalendarService: NSObject {
                     continuation.resume(throwing: URLError(.badServerResponse)); return
                 }
                 continuation.resume(returning: code)
+            }
+
+            let session: ASWebAuthenticationSession
+            if #available(iOS 26, *) {
+                session = ASWebAuthenticationSession(
+                    url: authURL,
+                    callback: .customScheme(callbackScheme),
+                    completionHandler: handler
+                )
+            } else {
+                session = ASWebAuthenticationSession(
+                    url: authURL,
+                    callbackURLScheme: callbackScheme,
+                    completionHandler: handler
+                )
             }
             session.presentationContextProvider = self
             session.prefersEphemeralWebBrowserSession = false

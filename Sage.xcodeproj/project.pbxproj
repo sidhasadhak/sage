@@ -17,7 +17,7 @@
 		AA1E81362F98409A0026DE56 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81352F98409A0026DE56 /* Accelerate.framework */; };
 		AA1E81382F9840A10026DE56 /* CoreLocation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81372F9840A10026DE56 /* CoreLocation.framework */; };
 		AA1E81412F9840FF0026DE56 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = AA1E81402F9840FF0026DE56 /* MLXLLM */; };
-		AA1E81432F9841000026DE56 /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = AA1E81422F9841000026DE56 /* Hub */; };
+		AA1E81432F9841000026DE56 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = AA1E81422F9841000026DE56 /* Tokenizers */; };
 		AA1E81452F9841100026DE56 /* NaturalLanguage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81442F9841100026DE56 /* NaturalLanguage.framework */; };
 		AA1E81462F9841200026DE56 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = AA1E81472F9841200026DE56 /* MLXVLM */; };
 /* End PBXBuildFile section */
@@ -74,7 +74,7 @@
 				AA1E812E2F98407B0026DE56 /* Contacts.framework in Frameworks */,
 				AA1E81452F9841100026DE56 /* NaturalLanguage.framework in Frameworks */,
 				AA1E81412F9840FF0026DE56 /* MLXLLM in Frameworks */,
-				AA1E81432F9841000026DE56 /* Hub in Frameworks */,
+				AA1E81432F9841000026DE56 /* Tokenizers in Frameworks */,
 				AA1E81462F9841200026DE56 /* MLXVLM in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -137,7 +137,7 @@
 			name = Sage;
 			packageProductDependencies = (
 				AA1E81402F9840FF0026DE56 /* MLXLLM */,
-				AA1E81422F9841000026DE56 /* Hub */,
+				AA1E81422F9841000026DE56 /* Tokenizers */,
 				AA1E81472F9841200026DE56 /* MLXVLM */,
 			);
 			productName = Sage;
@@ -169,7 +169,8 @@
 			mainGroup = AA1E808E2F9838B30026DE56;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */,
+				AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				AA1E81502F9844000026DE56 /* XCRemoteSwiftPackageReference "swift-transformers" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AA1E80982F9838B30026DE56 /* Products */;
@@ -259,6 +260,7 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				OTHER_SWIFT_FLAGS = "";
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -315,6 +317,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
+				OTHER_SWIFT_FLAGS = "";
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
@@ -411,12 +414,20 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */ = {
+		AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/ml-explore/mlx-swift-examples";
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 2.29.1;
+				minimumVersion = 3.31.3;
+			};
+		};
+		AA1E81502F9844000026DE56 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-transformers";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -424,17 +435,17 @@
 /* Begin XCSwiftPackageProductDependency section */
 		AA1E81402F9840FF0026DE56 /* MLXLLM */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			package = AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
 			productName = MLXLLM;
 		};
-		AA1E81422F9841000026DE56 /* Hub */ = {
+		AA1E81422F9841000026DE56 /* Tokenizers */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
-			productName = Hub;
+			package = AA1E81502F9844000026DE56 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Tokenizers;
 		};
 		AA1E81472F9841200026DE56 /* MLXVLM */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			package = AA1E81252F983F990026DE56 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
 			productName = MLXVLM;
 		};
 /* End XCSwiftPackageProductDependency section */

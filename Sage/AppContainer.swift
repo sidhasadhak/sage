@@ -51,9 +51,10 @@ final class AppContainer: ObservableObject {
 
     func bootstrap() async {
         await indexingService.loadSearchCache()
-        if let active = modelManager.activeModel {
-            // Fire model loading without blocking bootstrap — UI is usable immediately
-            Task { await llmService.loadModel(from: active) }
-        }
+    }
+
+    func loadActiveModelIfNeeded() async {
+        guard !llmService.isReady, let active = modelManager.activeModel else { return }
+        await llmService.loadModel(from: active)
     }
 }

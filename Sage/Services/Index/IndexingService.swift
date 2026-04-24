@@ -23,6 +23,17 @@ final class IndexingService: ObservableObject {
         static let photos   = "delta.lastPhotosIndexedAt"
         static let contacts = "delta.lastContactsIndexedAt"
         static let calendar = "delta.lastCalendarIndexedAt"
+        static let modelID  = "delta.lastIndexedModelID"
+    }
+
+    // Reads the user-configured lookback window (default 3 months).
+    private var indexingPeriodMonths: Int {
+        let v = UserDefaults.standard.integer(forKey: "indexing_period_months")
+        return v > 0 ? v : 3
+    }
+
+    private var periodStartDate: Date {
+        Calendar.current.date(byAdding: .month, value: -indexingPeriodMonths, to: Date()) ?? Date()
     }
 
     init(modelContext: ModelContext, searchEngine: SemanticSearchEngine, spotlightService: SpotlightService, llmService: LLMService? = nil, googleCalendarService: GoogleCalendarService? = nil) {
@@ -34,9 +45,19 @@ final class IndexingService: ObservableObject {
         lastIndexedAt = UserDefaults.standard.object(forKey: "lastIndexedAt") as? Date
     }
 
-    func indexAll() async {
+    // Pass the currently active model's catalogID so model changes can be detected.
+    func indexAll(currentModelID: String? = nil) async {
         guard !isIndexing else { return }
         isIndexing = true
+
+        // When the LLM model changes, photo captions become stale (vision capability may differ).
+        // Clear photo chunks and reset the delta so they're re-captioned with the new model.
+        let storedModelID = UserDefaults.standard.string(forKey: DeltaKeys.modelID)
+        if let currentModelID, currentModelID != storedModelID {
+            await clearChunks(ofType: .photo)
+            UserDefaults.standard.removeObject(forKey: DeltaKeys.photos)
+        }
+
         defer {
             isIndexing = false
             let now = Date()
@@ -45,12 +66,26 @@ final class IndexingService: ObservableObject {
             UserDefaults.standard.set(now, forKey: DeltaKeys.photos)
             UserDefaults.standard.set(now, forKey: DeltaKeys.contacts)
             UserDefaults.standard.set(now, forKey: DeltaKeys.calendar)
+            if let currentModelID {
+                UserDefaults.standard.set(currentModelID, forKey: DeltaKeys.modelID)
+            }
             scheduleBackgroundIndex()
         }
 
         await indexContacts()
         await indexCalendar()
         await indexPhotos()
+    }
+
+    // Removes all cached chunks of a given type so they'll be re-indexed on the next run.
+    private func clearChunks(ofType type: MemoryChunk.SourceType) async {
+        let descriptor = FetchDescriptor<MemoryChunk>()
+        guard let all = try? modelContext.fetch(descriptor) else { return }
+        for chunk in all where chunk.sourceType == type {
+            await searchEngine.removeFromCache(id: chunk.id)
+            modelContext.delete(chunk)
+        }
+        try? modelContext.save()
     }
 
     func scheduleBackgroundIndex() {
@@ -71,16 +106,19 @@ final class IndexingService: ObservableObject {
             CNContactPhoneNumbersKey as CNKeyDescriptor,
             CNContactEmailAddressesKey as CNKeyDescriptor,
             CNContactOrganizationNameKey as CNKeyDescriptor,
-            CNContactNoteKey as CNKeyDescriptor,
+            // CNContactNoteKey requires com.apple.developer.contacts.notes entitlement;
+            // including it without the entitlement throws and kills the entire batch.
             CNContactBirthdayKey as CNKeyDescriptor
         ]
         let request = CNContactFetchRequest(keysToFetch: keysToFetch)
 
         do {
-            var contacts: [CNContact] = []
-            try store.enumerateContacts(with: request) { contact, _ in
-                contacts.append(contact)
-            }
+            // enumerateContacts is synchronous and must not run on the main thread.
+            let contacts: [CNContact] = try await Task.detached(priority: .utility) {
+                var result: [CNContact] = []
+                try store.enumerateContacts(with: request) { contact, _ in result.append(contact) }
+                return result
+            }.value
 
             for contact in contacts {
                 await upsertContactChunk(contact)
@@ -121,8 +159,8 @@ final class IndexingService: ObservableObject {
     func indexCalendar() async {
         let store = EKEventStore()
         let now = Date()
-        let start = Calendar.current.date(byAdding: .day, value: -180, to: now)!
-        let end = Calendar.current.date(byAdding: .day, value: 180, to: now)!
+        let start = periodStartDate
+        let end = Calendar.current.date(byAdding: .month, value: 3, to: now)!
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
         let events = store.events(matching: predicate)
 
@@ -173,15 +211,17 @@ final class IndexingService: ObservableObject {
             sourceID: event.eventIdentifier ?? UUID().uuidString,
             content: content,
             keywords: keywords,
-            quality: .fast
+            quality: .fast,
+            sourceDate: event.startDate
         )
     }
 
     private func upsertReminderChunk(_ reminder: EKReminder) async {
         let status = reminder.isCompleted ? "completed" : "pending"
         var parts = ["Reminder: \(reminder.title ?? "Untitled")", "Status: \(status)"]
+        let dueDate = reminder.dueDateComponents?.date
 
-        if let due = reminder.dueDateComponents?.date {
+        if let due = dueDate {
             let formatter = DateFormatter()
             formatter.dateStyle = .medium
             parts.append("Due: \(formatter.string(from: due))")
@@ -193,7 +233,8 @@ final class IndexingService: ObservableObject {
             sourceID: reminder.calendarItemIdentifier,
             content: content,
             keywords: [reminder.title].compactMap { $0 },
-            quality: .fast
+            quality: .fast,
+            sourceDate: dueDate
         )
     }
 
@@ -202,8 +243,9 @@ final class IndexingService: ObservableObject {
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
 
+        let eventDate = event.start?.resolved
         var parts = ["Event: \(event.summary ?? "Untitled")"]
-        if let date = event.start?.resolved {
+        if let date = eventDate {
             parts.append("Date: \(formatter.string(from: date))")
         }
         if let location = event.location, !location.isEmpty {
@@ -223,7 +265,8 @@ final class IndexingService: ObservableObject {
             sourceID: "gcal-\(event.id)",
             content: content,
             keywords: keywords,
-            quality: .fast
+            quality: .fast,
+            sourceDate: eventDate
         )
     }
 
@@ -233,14 +276,11 @@ final class IndexingService: ObservableObject {
         let fetchOptions = PHFetchOptions()
         fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
 
-        if let since = UserDefaults.standard.object(forKey: DeltaKeys.photos) as? Date {
-            fetchOptions.predicate = NSPredicate(format: "creationDate > %@", since as CVarArg)
-        } else {
-            fetchOptions.fetchLimit = 500
-        }
+        // Delta: only photos newer than the last run. On first run, use the period window.
+        let since = UserDefaults.standard.object(forKey: DeltaKeys.photos) as? Date ?? periodStartDate
+        fetchOptions.predicate = NSPredicate(format: "creationDate > %@", since as CVarArg)
 
         let assets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
-        let geocoder = CLGeocoder()
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
 
@@ -249,11 +289,11 @@ final class IndexingService: ObservableObject {
         var assetList: [PHAsset] = []
         assets.enumerateObjects { asset, _, _ in assetList.append(asset) }
         for asset in assetList {
-            await upsertPhotoChunk(asset, geocoder: geocoder, dateFormatter: dateFormatter)
+            await upsertPhotoChunk(asset, dateFormatter: dateFormatter)
         }
     }
 
-    private func upsertPhotoChunk(_ asset: PHAsset, geocoder: CLGeocoder, dateFormatter: DateFormatter) async {
+    private func upsertPhotoChunk(_ asset: PHAsset, dateFormatter: DateFormatter) async {
         let date = asset.creationDate.map { dateFormatter.string(from: $0) } ?? "unknown date"
 
         // Try vision captioning if a vision model is active
@@ -280,13 +320,20 @@ final class IndexingService: ObservableObject {
 
         if let location = asset.location {
             do {
-                let placemarks = try await geocoder.reverseGeocodeLocation(location)
-                if let place = placemarks.first {
-                    let locationStr = [place.locality, place.administrativeArea, place.country]
-                        .compactMap { $0 }
-                        .joined(separator: ", ")
-                    if !locationStr.isEmpty { parts.append("at \(locationStr)") }
+                let locationStr: String
+                if #available(iOS 26, *),
+                   let request = MKReverseGeocodingRequest(location: location) {
+                    let items = try await request.mapItems
+                    let placemark = items.first?.placemark
+                    locationStr = [placemark?.locality, placemark?.administrativeArea, placemark?.country]
+                        .compactMap { $0 }.joined(separator: ", ")
+                } else {
+                    let placemarks = try await CLGeocoder().reverseGeocodeLocation(location)
+                    let place = placemarks.first
+                    locationStr = [place?.locality, place?.administrativeArea, place?.country]
+                        .compactMap { $0 }.joined(separator: ", ")
                 }
+                if !locationStr.isEmpty { parts.append("at \(locationStr)") }
             } catch {}
         }
 
@@ -299,13 +346,15 @@ final class IndexingService: ObservableObject {
             sourceID: asset.localIdentifier,
             content: content,
             keywords: keywords,
-            quality: .fast
+            quality: .fast,
+            sourceDate: asset.creationDate
         )
     }
 
     // MARK: - Notes
 
-    func indexNote(_ note: Note) async {
+    // labels: pre-generated LLM labels. If nil, falls back to splitting the note title.
+    func indexNote(_ note: Note, labels: [String]? = nil) async {
         let content = [
             note.title.isEmpty ? nil : "Note title: \(note.title)",
             note.body.isEmpty ? nil : note.body,
@@ -314,11 +363,15 @@ final class IndexingService: ObservableObject {
 
         guard !content.isEmpty else { return }
 
+        let keywords = labels?.isEmpty == false
+            ? labels!
+            : note.title.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+
         let chunk = await upsertChunk(
             sourceType: .note,
             sourceID: note.id.uuidString,
             content: content,
-            keywords: note.title.components(separatedBy: .whitespacesAndNewlines),
+            keywords: keywords,
             quality: .contextual
         )
         if let chunk {
@@ -341,7 +394,8 @@ final class IndexingService: ObservableObject {
         sourceID: String,
         content: String,
         keywords: [String],
-        quality: EmbeddingService.Quality
+        quality: EmbeddingService.Quality,
+        sourceDate: Date? = nil
     ) async -> MemoryChunk? {
         // Check for existing
         let descriptor = FetchDescriptor<MemoryChunk>(
@@ -351,12 +405,16 @@ final class IndexingService: ObservableObject {
 
         // Content-hash skip: if the text hasn't changed, avoid re-embedding (the expensive step)
         if let existing, existing.content == content {
+            if let sourceDate, existing.sourceDate == nil {
+                existing.sourceDate = sourceDate
+                try? modelContext.save()
+            }
             indexedCount += 1
             return existing
         }
 
         let chunk = existing ?? {
-            let c = MemoryChunk(sourceType: sourceType, sourceID: sourceID, content: content, keywords: keywords)
+            let c = MemoryChunk(sourceType: sourceType, sourceID: sourceID, content: content, keywords: keywords, sourceDate: sourceDate)
             modelContext.insert(c)
             return c
         }()
@@ -364,6 +422,7 @@ final class IndexingService: ObservableObject {
         chunk.content = content
         chunk.keywords = keywords
         chunk.updatedAt = Date()
+        if let sourceDate { chunk.sourceDate = sourceDate }
 
         // Compute embedding
         if let vector = try? await embeddingService.embed(text: content, quality: quality) {
@@ -392,3 +451,4 @@ final class IndexingService: ObservableObject {
 }
 
 import CoreLocation
+import MapKit

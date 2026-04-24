@@ -170,7 +170,7 @@ struct ModelCard: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
         } else if let local = localModel {
-            // Downloaded — show activate / delete
+            // Downloaded — activate / delete
             HStack(spacing: 10) {
                 Button(role: .destructive) {
                     container.modelManager.delete(local)
@@ -183,9 +183,7 @@ struct ModelCard: View {
                         .background(Color.red.opacity(0.1))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-
                 Spacer()
-
                 if isActive {
                     Button("Unload") {
                         container.modelManager.deactivate()

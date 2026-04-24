@@ -12,6 +12,7 @@ final class MemoryChunk {
     var updatedAt: Date
     var embeddingData: Data?
     var isSpotlightIndexed: Bool
+    var sourceDate: Date?
 
     @Relationship(deleteRule: .nullify)
     var note: Note?
@@ -23,7 +24,7 @@ final class MemoryChunk {
         case photo, contact, event, reminder, note, conversation, email
     }
 
-    init(sourceType: SourceType, sourceID: String, content: String, keywords: [String] = []) {
+    init(sourceType: SourceType, sourceID: String, content: String, keywords: [String] = [], sourceDate: Date? = nil) {
         self.id = UUID()
         self.sourceType = sourceType
         self.sourceID = sourceID
@@ -32,6 +33,7 @@ final class MemoryChunk {
         self.createdAt = Date()
         self.updatedAt = Date()
         self.isSpotlightIndexed = false
+        self.sourceDate = sourceDate
     }
 
     var openURL: URL? {

@@ -69,7 +69,7 @@ struct BubbleShape: Shape {
 
     func path(in rect: CGRect) -> Path {
         let r: CGFloat = 18
-        let tailR: CGFloat = 4
+        let _: CGFloat = 4 // tail radius reserved for future use
         var path = Path()
 
         if isUser {

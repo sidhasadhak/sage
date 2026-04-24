@@ -4,6 +4,8 @@ import UIKit
 struct SettingsView: View {
     @EnvironmentObject var container: AppContainer
     @AppStorage("app_color_scheme") private var colorSchemeRaw: String = AppColorScheme.system.rawValue
+    @AppStorage("sage_user_name") private var userName: String = ""
+    @AppStorage("indexing_period_months") private var indexingPeriodMonths: Int = 3
     @State private var showIndexConfirm = false
     @State private var showClearConfirm = false
     @State private var isIndexing = false
@@ -18,6 +20,18 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                // MARK: — Profile
+                Section("Profile") {
+                    HStack {
+                        Label("Your Name", systemImage: "person.fill")
+                        Spacer()
+                        TextField("Add your name", text: $userName)
+                            .multilineTextAlignment(.trailing)
+                            .foregroundStyle(.secondary)
+                            .autocorrectionDisabled()
+                    }
+                }
+
                 // MARK: — Appearance
                 Section("Appearance") {
                     Picker("Theme", selection: selectedScheme) {
@@ -92,6 +106,16 @@ struct SettingsView: View {
 
                 // MARK: — Indexing
                 Section {
+                    Picker(selection: $indexingPeriodMonths) {
+                        Text("1 month").tag(1)
+                        Text("3 months").tag(3)
+                        Text("6 months").tag(6)
+                        Text("1 year").tag(12)
+                        Text("2 years").tag(24)
+                    } label: {
+                        Label("Indexing Period", systemImage: "calendar.badge.clock")
+                    }
+
                     Button {
                         showIndexConfirm = true
                     } label: {
@@ -119,6 +143,8 @@ struct SettingsView: View {
                     }
                 } header: {
                     Text("Memory Index")
+                } footer: {
+                    Text("Items already indexed are kept unless you switch AI models, which re-indexes photos to use the new model's vision capabilities.")
                 }
 
                 // MARK: — Danger Zone
@@ -155,7 +181,8 @@ struct SettingsView: View {
                 Button("Start Indexing") {
                     isIndexing = true
                     Task {
-                        await container.indexingService.indexAll()
+                        let modelID = container.modelManager.activeModel?.catalogID
+                        await container.indexingService.indexAll(currentModelID: modelID)
                         isIndexing = false
                     }
                 }

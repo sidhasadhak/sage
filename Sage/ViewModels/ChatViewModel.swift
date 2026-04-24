@@ -78,7 +78,6 @@ final class ChatViewModel {
             let context = await contextBuilder.buildContext(for: trimmed, history: Array(history))
             let chatMessages = contextBuilder.buildMessages(history: Array(history), newUserMessage: trimmed)
 
-            // Surface photo results immediately while LLM generates
             let photoIDs = context.chunks
                 .filter { $0.sourceType == .photo }
                 .map { $0.sourceID }
@@ -96,7 +95,6 @@ final class ChatViewModel {
             assistantMessage.content = response
             streamingText = ""
 
-            // Detect what action the user wants
             pendingAction = Self.parseIntent(from: trimmed)
 
             let turnContent = "User asked: \(trimmed)\nSage replied: \(response.prefix(300))"
@@ -137,7 +135,6 @@ final class ChatViewModel {
         let range = NSRange(text.startIndex..., in: text)
         let date = detector?.matches(in: text, options: [], range: range).first?.date
 
-        // Calendar event — must check before generic "reminder" phrases
         let eventPatterns = [
             "schedule a meeting", "set up a meeting", "book a meeting",
             "create an event", "add to calendar", "schedule meeting",
@@ -150,7 +147,6 @@ final class ChatViewModel {
             return .scheduleCalendarEvent(title: String(title.prefix(100)), startDate: date)
         }
 
-        // Reminder
         let reminderPatterns = [
             "remind me to", "remind me about", "reminder to",
             "don't forget to", "remember to", "add reminder",

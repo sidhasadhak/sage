@@ -23,6 +23,19 @@ struct CatalogModel: Identifiable, Hashable {
         case vision = "Vision"
     }
 
+    init(
+        id: String, displayName: String, family: String, description: String,
+        parameterCount: String, sizeGB: Double, contextLength: Int,
+        quantization: String, tags: [Tag], minimumRAMGB: Int,
+        isVisionCapable: Bool
+    ) {
+        self.id = id; self.displayName = displayName; self.family = family
+        self.description = description; self.parameterCount = parameterCount
+        self.sizeGB = sizeGB; self.contextLength = contextLength
+        self.quantization = quantization; self.tags = tags
+        self.minimumRAMGB = minimumRAMGB; self.isVisionCapable = isVisionCapable
+    }
+
     var localDirectoryName: String {
         id.replacingOccurrences(of: "/", with: "_")
     }
@@ -32,6 +45,19 @@ struct CatalogModel: Identifiable, Hashable {
 
 enum ModelCatalog {
     static let all: [CatalogModel] = [
+        CatalogModel(
+            id: "mlx-community/gemma-4-e2b-4bit",
+            displayName: "Gemma 4 · E2B",
+            family: "Gemma",
+            description: "Google's newest Gemma 4 Efficient 2B. Extremely compact and fast while retaining strong instruction-following quality.",
+            parameterCount: "2B",
+            sizeGB: 1.3,
+            contextLength: 32768,
+            quantization: "4-bit",
+            tags: [.fast, .compact, .recommended],
+            minimumRAMGB: 4,
+            isVisionCapable: false,
+        ),
         CatalogModel(
             id: "mlx-community/Llama-3.2-1B-Instruct-4bit",
             displayName: "Llama 3.2 · 1B",
@@ -43,20 +69,7 @@ enum ModelCatalog {
             quantization: "4-bit",
             tags: [.fast, .compact],
             minimumRAMGB: 4,
-            isVisionCapable: false
-        ),
-        CatalogModel(
-            id: "mlx-community/SmolLM2-1.7B-Instruct-4bit",
-            displayName: "SmolLM2 · 1.7B",
-            family: "SmolLM",
-            description: "Hugging Face's ultra-compact model. Surprisingly capable for its tiny size.",
-            parameterCount: "1.7B",
-            sizeGB: 1.0,
-            contextLength: 8192,
-            quantization: "4-bit",
-            tags: [.fast, .compact],
-            minimumRAMGB: 4,
-            isVisionCapable: false
+            isVisionCapable: false,
         ),
         CatalogModel(
             id: "mlx-community/Llama-3.2-3B-Instruct-4bit",
@@ -68,32 +81,6 @@ enum ModelCatalog {
             contextLength: 8192,
             quantization: "4-bit",
             tags: [.recommended, .fast],
-            minimumRAMGB: 6,
-            isVisionCapable: false
-        ),
-        CatalogModel(
-            id: "mlx-community/gemma-2-2b-it-4bit",
-            displayName: "Gemma 2 · 2B",
-            family: "Gemma",
-            description: "Google's efficient model. Excellent instruction following and structured output.",
-            parameterCount: "2B",
-            sizeGB: 1.5,
-            contextLength: 8192,
-            quantization: "4-bit",
-            tags: [.fast],
-            minimumRAMGB: 6,
-            isVisionCapable: false
-        ),
-        CatalogModel(
-            id: "mlx-community/Phi-3.5-mini-instruct-4bit",
-            displayName: "Phi-3.5 Mini",
-            family: "Phi",
-            description: "Microsoft's efficient model with strong coding and reasoning despite small size.",
-            parameterCount: "3.8B",
-            sizeGB: 2.3,
-            contextLength: 128000,
-            quantization: "4-bit",
-            tags: [.reasoning],
             minimumRAMGB: 6,
             isVisionCapable: false
         ),
@@ -134,7 +121,7 @@ enum ModelCatalog {
             quantization: "4-bit",
             tags: [.capable, .reasoning],
             minimumRAMGB: 8,
-            isVisionCapable: false
+            isVisionCapable: false,
         ),
         CatalogModel(
             id: "mlx-community/gemma-3-4b-it-qat-4bit",
@@ -147,20 +134,7 @@ enum ModelCatalog {
             quantization: "4-bit QAT",
             tags: [.recommended, .vision],
             minimumRAMGB: 6,
-            isVisionCapable: true
-        ),
-        CatalogModel(
-            id: "mlx-community/gemma-3-12b-it-4bit",
-            displayName: "Gemma 3 · 12B Vision",
-            family: "Gemma",
-            description: "Google's larger Gemma 3 vision model. Superior photo understanding and reasoning. Requires iPhone 15 Pro or later.",
-            parameterCount: "12B",
-            sizeGB: 7.8,
-            contextLength: 131072,
-            quantization: "4-bit",
-            tags: [.capable, .vision],
-            minimumRAMGB: 12,
-            isVisionCapable: true
+            isVisionCapable: true,
         ),
         CatalogModel(
             id: "mlx-community/Qwen2-VL-2B-Instruct-4bit",
@@ -173,20 +147,7 @@ enum ModelCatalog {
             quantization: "4-bit",
             tags: [.recommended, .vision],
             minimumRAMGB: 6,
-            isVisionCapable: true
-        ),
-        CatalogModel(
-            id: "mlx-community/Qwen2-VL-7B-Instruct-4bit",
-            displayName: "Qwen2-VL · 7B",
-            family: "Qwen",
-            description: "Powerful vision-language model. Best photo understanding quality. Requires 8GB RAM.",
-            parameterCount: "7B",
-            sizeGB: 4.5,
-            contextLength: 32768,
-            quantization: "4-bit",
-            tags: [.capable, .vision],
-            minimumRAMGB: 8,
-            isVisionCapable: true
+            isVisionCapable: true,
         ),
     ]
 

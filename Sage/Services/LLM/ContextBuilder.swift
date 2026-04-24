@@ -55,11 +55,19 @@ final class ContextBuilder {
     private func buildSystemPrompt(chunks: [MemoryChunk], history: [Message]) -> String {
         var parts: [String] = []
 
+        let storedName = UserDefaults.standard.string(forKey: "sage_user_name") ?? ""
+        let nameClause = storedName.isEmpty
+            ? "the user"
+            : storedName
+        let nameInstruction = storedName.isEmpty
+            ? ""
+            : "\nThe user's name is \(storedName). Address them by name naturally when it feels warm and appropriate — not in every message."
+
         parts.append("""
         You are Sage, a private AI assistant that lives entirely on this device.
-        You have been given access to the user's personal data stored locally.
+        You have been given access to \(nameClause)'s personal data stored locally.
         All data is private and stays on-device — never mention cloud or external services.
-        Be warm, concise, and specific. Reference personal context naturally when relevant.
+        Be warm, concise, and specific. Reference personal context naturally when relevant.\(nameInstruction)
         """)
 
         if !chunks.isEmpty {
