@@ -82,8 +82,14 @@ final class LLMService {
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil,
             queue: .main
-        ) { _ in
-            MLX.Memory.cacheLimit = 0
+        ) { [weak self] _ in
+            // IMPORTANT: setting MLX.Memory.cacheLimit = 0 while a Metal compute kernel
+            // is active triggers the C-level fatalErrorHandler — no Swift catch possible.
+            // Only reduce the cache when the GPU is idle.
+            Task { @MainActor [weak self] in
+                guard let self, !self.isGenerating, !self.isBackgroundProcessing else { return }
+                MLX.Memory.cacheLimit = 0
+            }
         }
     }
 
@@ -99,6 +105,9 @@ final class LLMService {
         return
         #else
         guard loadedModelID != localModel.catalogID else { return }
+        // Never swap out the model container while Metal is computing — freeing GPU
+        // resources mid-kernel causes the MLX fatal error handler to fire.
+        guard !isGenerating, !isBackgroundProcessing else { return }
 
         let catalogModel = ModelCatalog.model(for: localModel.catalogID)
 
@@ -153,6 +162,9 @@ final class LLMService {
     }
 
     func unloadModel() {
+        // Freeing modelContainer while a Metal kernel is running causes the MLX fatal error.
+        // If the GPU is busy, skip — the user can retry once generation finishes.
+        guard !isGenerating, !isBackgroundProcessing else { return }
         modelContainer = nil
         loadedModelID = nil
         MLX.Memory.cacheLimit = 0
@@ -191,21 +203,21 @@ final class LLMService {
         messages: [(role: String, content: String)],
         onToken: @escaping @Sendable (String) -> Void
     ) async throws -> String {
-        guard let container = modelContainer else {
-            throw ModelError.noModelSelected
-        }
+        // Re-entrancy guard: only one user-facing generate can run at a time.
+        // Concurrent calls (e.g. double-tap Send) would both reach container.generate()
+        // simultaneously and crash MLX's C fatal error handler.
+        guard case .ready = state else { throw ModelError.noModelSelected }
+        guard let container = modelContainer else { throw ModelError.noModelSelected }
 
-        // If a background task (entity extraction, labelling, captioning) is mid-flight
-        // past its prepare() call, wait up to 3 s for it to finish before proceeding.
-        // isBackgroundProcessing is cleared by each background function's defer block.
+        // If a background task is mid-flight past its prepare() suspension point,
+        // wait up to 3 s for it to yield before proceeding — user request wins.
         if isBackgroundProcessing {
             var waited = 0
             while isBackgroundProcessing && waited < 30 {
                 try await Task.sleep(nanoseconds: 100_000_000) // 0.1 s
                 waited += 1
             }
-            // If still stuck after 3 s, force-clear and proceed — user request wins.
-            isBackgroundProcessing = false
+            isBackgroundProcessing = false  // force-clear if still stuck
         }
 
         state = .generating

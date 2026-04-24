@@ -58,6 +58,8 @@ final class ChatViewModel {
     func send(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let conversation else { return }
+        // Prevent concurrent sends — two simultaneous generate() calls crash MLX.
+        guard !llmService.isGenerating else { return }
 
         pendingAction = nil
         photoAssetIDs = []
