@@ -5,17 +5,48 @@ struct ModelLibraryView: View {
     @EnvironmentObject var container: AppContainer
     @Query var localModels: [LocalModel]
 
-    @State private var selectedFamily: String? = nil
+    @State private var selectedCapability: Capability = .all
     @State private var showDeleteConfirm: LocalModel? = nil
 
-    var families: [String] {
-        let all = ModelCatalog.all.map(\.family)
-        return Array(Set(all)).sorted()
+    // MARK: - Capability filter
+
+    enum Capability: String, CaseIterable, Identifiable {
+        case all           = "All"
+        case fast          = "Fast"
+        case reasoning     = "Reasoning"
+        case vision        = "Vision"
+        case multilingual  = "Multilingual"
+        case photoAnalysis = "Photo Analysis"
+
+        var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .all:           return "square.grid.2x2"
+            case .fast:          return "bolt"
+            case .reasoning:     return "brain"
+            case .vision:        return "eye"
+            case .multilingual:  return "globe"
+            case .photoAnalysis: return "photo.stack"
+            }
+        }
     }
 
     var filteredCatalog: [CatalogModel] {
-        guard let family = selectedFamily else { return ModelCatalog.all }
-        return ModelCatalog.all.filter { $0.family == family }
+        switch selectedCapability {
+        case .all:
+            return ModelCatalog.all
+        case .fast:
+            return ModelCatalog.all.filter { $0.tags.contains(.fast) || $0.tags.contains(.compact) }
+        case .reasoning:
+            return ModelCatalog.all.filter { $0.tags.contains(.reasoning) || $0.tags.contains(.capable) }
+        case .vision:
+            return ModelCatalog.all.filter { $0.isVisionCapable }
+        case .multilingual:
+            return ModelCatalog.all.filter { $0.tags.contains(.multilingual) }
+        case .photoAnalysis:
+            return ModelCatalog.photoAnalysis
+        }
     }
 
     var body: some View {
@@ -26,11 +57,17 @@ struct ModelLibraryView: View {
                     .padding(.top, 12)
                     .padding(.bottom, 4)
 
-                familyFilterBar
+                capabilityFilterBar
                     .padding(.vertical, 8)
 
                 ScrollView {
                     LazyVStack(spacing: 12) {
+                        // Section header for the Photo Analysis filter
+                        if selectedCapability == .photoAnalysis {
+                            photoAnalysisSectionHeader
+                                .padding(.horizontal, 16)
+                        }
+
                         ForEach(filteredCatalog) { model in
                             ModelCard(
                                 catalog: model,
@@ -120,24 +157,39 @@ struct ModelLibraryView: View {
         }
     }
 
-    private var familyFilterBar: some View {
+    private var capabilityFilterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                FilterChip(label: "All", icon: "square.grid.2x2", isSelected: selectedFamily == nil) {
-                    selectedFamily = nil
-                }
-                ForEach(families, id: \.self) { family in
+                ForEach(Capability.allCases) { cap in
                     FilterChip(
-                        label: family,
-                        icon: iconFor(family: family),
-                        isSelected: selectedFamily == family
+                        label: cap.rawValue,
+                        icon: cap.icon,
+                        isSelected: selectedCapability == cap
                     ) {
-                        selectedFamily = selectedFamily == family ? nil : family
+                        selectedCapability = cap
                     }
                 }
             }
             .padding(.horizontal, 16)
         }
+    }
+
+    private var photoAnalysisSectionHeader: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "photo.stack")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Text("Photo Analysis")
+                    .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                    .foregroundStyle(.primary)
+            }
+            Text("Downloads once. Runs at index time to generate rich photo descriptions — any chat model can then search your photos by content.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 6)
     }
 
     private var storageInfo: some View {
@@ -149,16 +201,5 @@ struct ModelLibraryView: View {
 
     private func localModel(for catalogID: String) -> LocalModel? {
         localModels.first { $0.catalogID == catalogID }
-    }
-
-    private func iconFor(family: String) -> String {
-        switch family {
-        case "Llama": return "l.circle"
-        case "Phi": return "p.circle"
-        case "Gemma": return "g.circle"
-        case "Mistral": return "m.circle"
-        case "Qwen": return "q.circle"
-        default: return "cpu"
-        }
     }
 }

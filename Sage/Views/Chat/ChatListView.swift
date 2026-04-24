@@ -39,11 +39,10 @@ struct ChatListView: View {
                 ChatView(conversation: selectedConversation)
                     .environmentObject(container)
             }
-            .sheet(isPresented: $showVoiceCapture, onDismiss: {
-                // After voice capture (saved or skipped) open a fresh chat
-                selectedConversation = nil
-                showingChat = true
-            }) {
+            .sheet(isPresented: $showVoiceCapture) {
+                // Voice capture saves to Notes/Reminders/Calendar — do NOT navigate to Chat.
+                // The user can open a chat separately if they want to follow up.
+            } content: {
                 VoiceMemoryCaptureView()
                     .environmentObject(container)
             }

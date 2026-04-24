@@ -22,6 +22,9 @@ struct MemoryBrowserView: View {
     @State private var expandedWeeks: Set<String> = []
     @State private var expandedDays: Set<String> = []
 
+    /// Calendar is the default view; user can switch to the hierarchical list.
+    @State private var showCalendar = true
+
     // MARK: - Sort key
 
     enum SortKey: String, CaseIterable, Identifiable {
@@ -206,16 +209,31 @@ struct MemoryBrowserView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                // Source-type filter bar — always visible in both calendar and list modes.
                 typeFilterBar
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                if filteredChunks.isEmpty { emptyState } else { chunkList }
+
+                if showCalendar {
+                    // Pass filteredChunks so the calendar respects the active type filter.
+                    CalendarMemoryView(chunks: filteredChunks, onChunkTap: handleChunkTap)
+                } else {
+                    if filteredChunks.isEmpty { emptyState } else { chunkList }
+                }
             }
             .navigationTitle("Memory")
-            .searchable(text: $searchText, prompt: "Search your memories")
+            .searchable(text: showCalendar ? .constant("") : $searchText, prompt: "Search your memories")
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { showCalendar.toggle() }
+                    } label: {
+                        Image(systemName: showCalendar ? "list.bullet" : "calendar")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    sortMenu
+                    if !showCalendar { sortMenu }
                 }
             }
             .onChange(of: searchText) { _, _ in Task { await viewModel?.search() } }
