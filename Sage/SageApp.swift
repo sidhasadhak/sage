@@ -26,7 +26,8 @@ struct SageApp: App {
         ) { task in
             guard let processingTask = task as? BGProcessingTask else { return }
             let indexTask = Task {
-                await appContainer.indexingService.indexAll()
+                // Background run: device is charging + idle, safe to load SmolVLM for captions.
+                await appContainer.indexingService.indexAll(isBackgroundRun: true)
                 processingTask.setTaskCompleted(success: true)
             }
             processingTask.expirationHandler = { indexTask.cancel() }

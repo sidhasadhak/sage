@@ -45,11 +45,14 @@ struct SettingsView: View {
                     .listRowInsets(.init(top: 8, leading: 0, bottom: 8, trailing: 0))
                 }
 
-                // MARK: — AI Model
+                // MARK: — AI Models
                 Section {
-                    modelStatusRow
+                    aiModelStatusRow
+                    modelStorageRow
                 } header: {
-                    Text("AI Model")
+                    Text("AI Models")
+                } footer: {
+                    Text("Sage uses two private, on-device models. No data ever leaves your iPhone.")
                 }
 
                 // MARK: — Permissions
@@ -144,7 +147,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Memory Index")
                 } footer: {
-                    Text("Items already indexed are kept unless you switch AI models, which re-indexes photos to use the new model's vision capabilities.")
+                    Text("Items already indexed are kept. Photos are re-captioned automatically using the SmolVLM model during background indexing.")
                 }
 
                 // MARK: — Danger Zone
@@ -181,7 +184,7 @@ struct SettingsView: View {
                 Button("Start Indexing") {
                     isIndexing = true
                     Task {
-                        let modelID = container.modelManager.activeModel?.catalogID
+                        let modelID = container.modelManager.chatModel?.catalogID
                         await container.indexingService.indexAll(currentModelID: modelID)
                         isIndexing = false
                     }
@@ -206,22 +209,51 @@ struct SettingsView: View {
         }
     }
 
-    private var modelStatusRow: some View {
+    // MARK: - AI Model rows
+
+    private var aiModelStatusRow: some View {
         HStack {
-            Label("Apple Intelligence", systemImage: "apple.intelligence")
+            Label("Chat Model", systemImage: "bubble.left.and.bubble.right.fill")
             Spacer()
-            if container.llmService.isReady {
-                Label("Active", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.subheadline)
-            } else {
-                Text("Unavailable")
-                    .foregroundStyle(.red)
-                    .font(.subheadline)
+            Group {
+                switch container.llmService.state {
+                case .ready:
+                    Label("Active", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case .loading(let name):
+                    HStack(spacing: 6) {
+                        ProgressView().scaleEffect(0.7)
+                        Text("Loading \(name)…")
+                    }
+                    .foregroundStyle(.secondary)
+                case .generating:
+                    Label("Generating", systemImage: "ellipsis.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                case .error:
+                    Label("Error", systemImage: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                case .noModelSelected:
+                    Label("Not loaded", systemImage: "circle")
+                        .foregroundStyle(.secondary)
+                }
             }
+            .font(.subheadline)
+        }
+    }
+
+    private var modelStorageRow: some View {
+        HStack {
+            Label("On-device storage", systemImage: "internaldrive")
+            Spacer()
+            Text(container.modelManager.totalStorageGB > 0
+                 ? String(format: "%.1f GB", container.modelManager.totalStorageGB)
+                 : "—")
+                .foregroundStyle(.secondary)
         }
     }
 }
+
+// MARK: - Shared permission row
 
 struct PermissionRow: View {
     let title: String
@@ -258,6 +290,8 @@ struct PermissionRow: View {
         }
     }
 }
+
+// MARK: - Bundle extension
 
 extension Bundle {
     var appVersion: String {

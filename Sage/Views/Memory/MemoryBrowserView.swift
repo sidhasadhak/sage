@@ -15,6 +15,7 @@ struct MemoryBrowserView: View {
     @State private var selectedNote: Note?
     @State private var selectedPhotoID: String?
     @State private var selectedContactID: String?
+    @State private var showCalendar = true          // calendar is the default
     @State private var sortKey: SortKey = .sourceDate
     @State private var sortAscending = false
     @State private var expandedYears: Set<String> = []
@@ -209,13 +210,33 @@ struct MemoryBrowserView: View {
                 typeFilterBar
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                if filteredChunks.isEmpty { emptyState } else { chunkList }
+
+                if showCalendar {
+                    if allChunks.isEmpty {
+                        emptyState
+                    } else {
+                        CalendarMemoryView(
+                            chunks: filteredChunks,
+                            onChunkTap: { openChunk($0) }
+                        )
+                    }
+                } else {
+                    if filteredChunks.isEmpty { emptyState } else { chunkList }
+                }
             }
             .navigationTitle("Memory")
             .searchable(text: $searchText, prompt: "Search your memories")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    sortMenu
+                    HStack(spacing: 4) {
+                        if !showCalendar { sortMenu }
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { showCalendar.toggle() }
+                        } label: {
+                            Image(systemName: showCalendar ? "list.bullet" : "calendar")
+                                .imageScale(.medium)
+                        }
+                    }
                 }
             }
             .onChange(of: searchText) { _, _ in Task { await viewModel?.search() } }

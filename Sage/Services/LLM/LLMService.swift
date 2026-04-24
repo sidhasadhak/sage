@@ -38,9 +38,9 @@ private struct TransformersTokenizerBridge: MLXLMCommon.Tokenizer, @unchecked Se
         tools: [[String: any Sendable]]?,
         additionalContext: [String: any Sendable]?
     ) throws -> [Int] {
-        let msgs = messages.map { $0.mapValues { $0 as Any } }
+        let msgs     = messages.map { $0.mapValues { $0 as Any } }
         let toolSpecs = tools?.map { $0.mapValues { $0 as Any } }
-        let ctx = additionalContext?.mapValues { $0 as Any }
+        let ctx      = additionalContext?.mapValues { $0 as Any }
         do {
             return try upstream.applyChatTemplate(messages: msgs, tools: toolSpecs, additionalContext: ctx)
         } catch Tokenizers.TokenizerError.missingChatTemplate {
@@ -74,22 +74,33 @@ final class LLMService {
     }
 
     private(set) var state: State = .noModelSelected
+    private(set) var loadedModelID: String?
+
     private var modelContainer: ModelContainer?
-    private var loadedModelID: String?
+
+    /// Serialises background MLX calls (labels, captions, entities) so they
+    /// never overlap with an active `generate()` or with each other.
+    private(set) var isBackgroundProcessing = false
 
     init() {
+        // Only evict GPU cache when fully idle — never during active computation.
         NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil,
             queue: .main
-        ) { _ in
-            MLX.Memory.cacheLimit = 0
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      !self.isGenerating,
+                      !self.isBackgroundProcessing else { return }
+                MLX.Memory.cacheLimit = 0
+            }
         }
     }
 
-    var temperature: Float = 0.7
-    var topP: Float = 0.9
-    var maxNewTokens: Int = 1024
+    var temperature: Float  = 0.7
+    var topP: Float         = 0.9
+    var maxNewTokens: Int   = 1024
 
     // MARK: - Model lifecycle
 
@@ -99,6 +110,8 @@ final class LLMService {
         return
         #else
         guard loadedModelID != localModel.catalogID else { return }
+        // Never swap the model while the GPU is busy.
+        guard !isGenerating, !isBackgroundProcessing else { return }
 
         let catalogModel = ModelCatalog.model(for: localModel.catalogID)
 
@@ -114,16 +127,14 @@ final class LLMService {
 
         state = .loading(localModel.displayName)
         modelContainer = nil
-        loadedModelID = nil
+        loadedModelID  = nil
 
         let displayName = localModel.displayName
-        let localURL = localModel.localURL
+        let localURL    = localModel.localURL
 
         do {
-            // Gemma 4 (text) lives in MLXLLM but Gemma 3 vision lives in MLXVLM.
-            // All Gemma variants need <end_of_turn> as an extra EOS token.
             let extraEOS: Set<String> = catalogModel?.family == "Gemma" ? ["<end_of_turn>"] : []
-            let config = ModelConfiguration(directory: localURL, extraEOSTokens: extraEOS)
+            let config       = ModelConfiguration(directory: localURL, extraEOSTokens: extraEOS)
             let useVLMFactory = ModelCatalog.isVisionCapable(for: localModel.catalogID)
 
             let loaded = try await Task.detached(priority: .userInitiated) {
@@ -144,7 +155,7 @@ final class LLMService {
             }.value
 
             modelContainer = loaded
-            loadedModelID = localModel.catalogID
+            loadedModelID  = localModel.catalogID
             state = .ready(displayName)
         } catch {
             state = .error("Failed to load \(displayName): \(error.localizedDescription)")
@@ -153,8 +164,9 @@ final class LLMService {
     }
 
     func unloadModel() {
+        guard !isGenerating, !isBackgroundProcessing else { return }
         modelContainer = nil
-        loadedModelID = nil
+        loadedModelID  = nil
         MLX.Memory.cacheLimit = 0
         state = .noModelSelected
     }
@@ -171,16 +183,34 @@ final class LLMService {
         return ModelCatalog.isVisionCapable(for: id)
     }
 
-    // MARK: - Generation
+    /// True when the photo-analysis (SmolVLM) model is currently loaded.
+    var isPhotoAnalysisModelActive: Bool {
+        guard let id = loadedModelID else { return false }
+        return ModelCatalog.isPhotoAnalysisModel(for: id)
+    }
+
+    // MARK: - Generation (chat)
 
     func generate(
         systemPrompt: String,
         messages: [(role: String, content: String)],
         onToken: @escaping @Sendable (String) -> Void
     ) async throws -> String {
-        guard let container = modelContainer else {
-            throw ModelError.noModelSelected
+        guard case .ready = state else { throw ModelError.noModelSelected }
+        guard let container = modelContainer else { throw ModelError.noModelSelected }
+
+        // Wait for any background processing to drain (max 3 s) then proceed.
+        if isBackgroundProcessing {
+            var waited = 0
+            while isBackgroundProcessing && waited < 30 {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
+            isBackgroundProcessing = false
         }
+
+        // Re-check after suspension
+        guard case .ready = state, modelContainer != nil else { throw ModelError.noModelSelected }
 
         state = .generating
         defer {
@@ -200,11 +230,11 @@ final class LLMService {
         chatMessages += messages.map { msg in
             switch msg.role {
             case "assistant": return .assistant(msg.content)
-            default: return .user(msg.content)
+            default:          return .user(msg.content)
             }
         }
 
-        let userInput = UserInput(chat: chatMessages)
+        let userInput      = UserInput(chat: chatMessages)
         let generateParams = GenerateParameters(
             maxTokens: maxNewTokens,
             temperature: temperature,
@@ -212,6 +242,10 @@ final class LLMService {
         )
 
         let lmInput = try await container.prepare(input: userInput)
+
+        // Re-check after suspend — another caller may have changed state.
+        guard case .generating = state else { return "" }
+
         let stream = try await container.generate(input: lmInput, parameters: generateParams)
 
         var output = ""
@@ -232,10 +266,66 @@ final class LLMService {
         )
     }
 
-    // Extracts up to 10 context-aware labels from text using the loaded model.
-    // Does NOT change observable state — safe to call alongside active chat sessions.
+    // MARK: - Background helpers (serialised via isBackgroundProcessing)
+
+    /// Extracts up to 10 structured entities from text using the loaded model.
+    /// Returns strings in "type:name" format, e.g. ["person:John Smith", "place:Paris"].
+    /// Safe to call while the chat session is idle — re-checks state after every suspension.
+    func extractEntities(from text: String) async -> [String] {
+        guard case .ready = state, !isBackgroundProcessing,
+              let container = modelContainer else { return [] }
+
+        isBackgroundProcessing = true
+        defer { isBackgroundProcessing = false }
+
+        do {
+            let chatMessages: [Chat.Message] = [
+                .system("You are a precise entity extractor. Return only valid JSON arrays."),
+                .user("""
+                Extract named entities from the text below.
+                Return a JSON array of strings in "type:name" format.
+                Types: person, place, organisation, project, product, event, date.
+                Return at most 10 entries. No explanation — only the JSON array.
+
+                Text: \(text.prefix(600))
+                """)
+            ]
+
+            let params  = GenerateParameters(maxTokens: 120, temperature: 0.1, topP: 0.9)
+            let lmInput = try await container.prepare(input: UserInput(chat: chatMessages))
+
+            // Re-check after suspension — user may have sent a message.
+            guard case .ready = state else { return [] }
+
+            let stream = try await container.generate(input: lmInput, parameters: params)
+            var output = ""
+            for await generation in stream {
+                if case .chunk(let t) = generation { output += t }
+            }
+
+            // Parse JSON array
+            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let start = trimmed.firstIndex(of: "["), let end = trimmed.lastIndex(of: "]") {
+                let jsonSlice = String(trimmed[start...end])
+                if let data = jsonSlice.data(using: .utf8),
+                   let array = try? JSONDecoder().decode([String].self, from: data) {
+                    return Array(array
+                        .filter { $0.contains(":") && $0.count < 60 }
+                        .prefix(10))
+                }
+            }
+        } catch {}
+        return []
+    }
+
+    /// Extracts up to 10 context-aware labels from text. Safe for background use.
     func generateLabels(for text: String) async -> [String] {
-        guard case .ready = state, let container = modelContainer else { return [] }
+        guard case .ready = state, !isBackgroundProcessing,
+              let container = modelContainer else { return [] }
+
+        isBackgroundProcessing = true
+        defer { isBackgroundProcessing = false }
+
         do {
             let chatMessages: [Chat.Message] = [
                 .system("You are a concise label extractor. You only return comma-separated labels."),
@@ -247,18 +337,22 @@ final class LLMService {
                 Text: \(text.prefix(800))
                 """)
             ]
-            let params = GenerateParameters(maxTokens: 80, temperature: 0.2, topP: 0.9)
+            let params  = GenerateParameters(maxTokens: 80, temperature: 0.2, topP: 0.9)
             let lmInput = try await container.prepare(input: UserInput(chat: chatMessages))
+
+            guard case .ready = state else { return [] }
+
             let stream = try await container.generate(input: lmInput, parameters: params)
             var output = ""
             for await generation in stream {
                 if case .chunk(let t) = generation { output += t }
             }
-            let labels = output
+            return output
                 .components(separatedBy: ",")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
                 .filter { !$0.isEmpty && $0.count < 40 }
-            return Array(labels.prefix(10))
+                .prefix(10)
+                .map { $0 }
         } catch {
             return []
         }
@@ -268,21 +362,29 @@ final class LLMService {
         #if targetEnvironment(simulator)
         return "Photo captured on device"
         #else
-        guard let container = modelContainer else { throw ModelError.noModelSelected }
+        guard case .ready = state, !isBackgroundProcessing,
+              let container = modelContainer else { throw ModelError.noModelSelected }
         guard isVisionCapable else {
             throw ModelError.loadFailed("Active model does not support vision")
         }
         guard let ciImage = CIImage(image: image) else {
             throw ModelError.loadFailed("Could not process image")
         }
+
+        isBackgroundProcessing = true
+        defer { isBackgroundProcessing = false }
+
         let userInput = UserInput(chat: [
             .user(
                 "Describe what you see in this photo. Include the scene, objects, people, colours, location, activities, and mood. Be concise but specific.",
                 images: [.ciImage(ciImage)]
             )
         ])
-        let params = GenerateParameters(maxTokens: 200, temperature: 0.3, topP: 0.9)
+        let params  = GenerateParameters(maxTokens: 200, temperature: 0.3, topP: 0.9)
         let lmInput = try await container.prepare(input: userInput)
+
+        guard case .ready = state else { return "Photo" }
+
         let stream = try await container.generate(input: lmInput, parameters: params)
         var output = ""
         for await generation in stream {

@@ -20,41 +20,106 @@ struct DownloadState {
             }
             return "\(Int(progress * 100))%"
         case .extracting: return "Processing…"
-        case .ready: return "Ready"
-        case .failed: return error ?? "Failed"
+        case .ready:      return "Ready"
+        case .failed:     return error ?? "Failed"
         }
     }
 }
 
+// MARK: - ModelManager
+
+/// Manages the two fixed Sage models (chat + photo analysis).
+/// Download states are exposed so ModelSetupView can show progress.
 @Observable
 @MainActor
 final class ModelManager {
 
-    private(set) var downloads: [String: DownloadState] = [:]    // catalogID -> state
-    private(set) var activeModel: LocalModel?
-    private(set) var loadedModelID: String?     // currently loaded in RAM
+    // MARK: - State
+
+    /// Live download progress keyed by catalog ID.
+    private(set) var downloads: [String: DownloadState] = [:]
+
+    /// The downloaded chat model record (nil = not yet downloaded).
+    private(set) var chatModel: LocalModel?
+
+    /// The downloaded photo-analysis model record (nil = not yet downloaded).
+    private(set) var photoModel: LocalModel?
+
+    /// True once both models are on disk and ready to load.
+    var bothModelsDownloaded: Bool { chatModel != nil && photoModel != nil }
+
+    /// Overall 0–1 progress across both downloads (used by setup screen).
+    var overallProgress: Double {
+        let chatP  = downloads[ModelCatalog.chatModel.id]?.progress  ?? (chatModel  != nil ? 1.0 : 0.0)
+        let photoP = downloads[ModelCatalog.photoAnalysisModel.id]?.progress ?? (photoModel != nil ? 1.0 : 0.0)
+        return (chatP + photoP) / 2.0
+    }
+
+    var totalStorageGB: Double {
+        (chatModel != nil ? ModelCatalog.chatModel.sizeGB : 0)
+            + (photoModel != nil ? ModelCatalog.photoAnalysisModel.sizeGB : 0)
+    }
 
     private let modelContext: ModelContext
 
+    // MARK: - Init
+
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
-        activeModel = fetchActiveModel()
+        chatModel  = fetchLocalModel(for: ModelCatalog.chatModel.id)
+        photoModel = fetchLocalModel(for: ModelCatalog.photoAnalysisModel.id)
     }
 
     // MARK: - Download
 
-    func download(_ catalog: CatalogModel) {
-        guard downloads[catalog.id] == nil else { return }
-        downloads[catalog.id] = DownloadState()
+    /// Starts downloading whichever models are not yet on disk.
+    func downloadAllModels() {
+        startDownloadIfNeeded(ModelCatalog.chatModel,          existing: chatModel)
+        startDownloadIfNeeded(ModelCatalog.photoAnalysisModel, existing: photoModel)
+    }
 
-        Task {
-            await performDownload(catalog)
+    /// Re-download a specific model (deletes the existing record first).
+    func redownload(_ catalog: CatalogModel) {
+        let existing = catalog.isPhotoAnalysisModel ? photoModel : chatModel
+        if let existing {
+            try? FileManager.default.removeItem(at: existing.localURL)
+            modelContext.delete(existing)
+            try? modelContext.save()
+            if catalog.isPhotoAnalysisModel { photoModel = nil } else { chatModel = nil }
         }
+        startDownload(catalog)
     }
 
     func cancelDownload(_ catalogID: String) {
         downloads.removeValue(forKey: catalogID)
-        // Note: actual URLSession task cancellation would be wired here in a full impl
+    }
+
+    // MARK: - Delete
+
+    func delete(_ model: LocalModel) {
+        try? FileManager.default.removeItem(at: model.localURL)
+        if model.catalogID == ModelCatalog.chatModel.id          { chatModel  = nil }
+        if model.catalogID == ModelCatalog.photoAnalysisModel.id { photoModel = nil }
+        modelContext.delete(model)
+        try? modelContext.save()
+    }
+
+    // MARK: - Helpers
+
+    func localModel(for catalogID: String) -> LocalModel? {
+        catalogID == ModelCatalog.chatModel.id ? chatModel : photoModel
+    }
+
+    // MARK: - Private
+
+    private func startDownloadIfNeeded(_ catalog: CatalogModel, existing: LocalModel?) {
+        guard existing == nil, downloads[catalog.id] == nil else { return }
+        startDownload(catalog)
+    }
+
+    private func startDownload(_ catalog: CatalogModel) {
+        downloads[catalog.id] = DownloadState()
+        Task { await performDownload(catalog) }
     }
 
     private func performDownload(_ catalog: CatalogModel) async {
@@ -63,28 +128,25 @@ final class ModelManager {
         do {
             try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
 
-            // Download each required file from HuggingFace raw content
-            // MLX models consist of: config.json, tokenizer files, model weights (.safetensors)
             let filesToDownload = try await fetchFileList(repoID: catalog.id)
             let total = filesToDownload.count
 
             for (index, filename) in filesToDownload.enumerated() {
-                let fileURL = hfRawURL(repoID: catalog.id, filename: filename)
+                let fileURL  = hfRawURL(repoID: catalog.id, filename: filename)
                 let destFile = destDir.appendingPathComponent(filename)
 
-                // Skip already-downloaded files (resume support)
+                // Resume support: skip files already on disk
                 if FileManager.default.fileExists(atPath: destFile.path) { continue }
 
-                downloads[catalog.id]?.phase = .downloading
+                downloads[catalog.id]?.phase    = .downloading
                 downloads[catalog.id]?.progress = Double(index) / Double(total)
 
-                try await downloadFile(from: fileURL, to: destFile, catalogID: catalog.id,
-                                       fileIndex: index, totalFiles: total)
+                try await downloadFile(from: fileURL, to: destFile,
+                                       catalogID: catalog.id, fileIndex: index, totalFiles: total)
             }
 
             downloads[catalog.id]?.phase = .extracting
 
-            // Create LocalModel record
             let localModel = LocalModel(
                 catalogID: catalog.id,
                 displayName: catalog.displayName,
@@ -92,8 +154,9 @@ final class ModelManager {
                 localDirectory: catalog.localDirectoryName
             )
             modelContext.insert(localModel)
-            try modelContext.save()
+            try? modelContext.save()
 
+            if catalog.isPhotoAnalysisModel { photoModel = localModel } else { chatModel = localModel }
             downloads.removeValue(forKey: catalog.id)
 
         } catch {
@@ -102,76 +165,25 @@ final class ModelManager {
         }
     }
 
-    // MARK: - Activation
-
-    func setActive(_ model: LocalModel) {
-        // Deactivate all others
-        let all = (try? modelContext.fetch(FetchDescriptor<LocalModel>())) ?? []
-        for m in all { m.isActive = false }
-        model.isActive = true
-        activeModel = model
-        try? modelContext.save()
-    }
-
-    func deactivate() {
-        let all = (try? modelContext.fetch(FetchDescriptor<LocalModel>())) ?? []
-        for m in all { m.isActive = false }
-        activeModel = nil
-        try? modelContext.save()
-    }
-
-    // MARK: - Delete
-
-    func delete(_ model: LocalModel) {
-        try? FileManager.default.removeItem(at: model.localURL)
-        if model.isActive { activeModel = nil }
-        modelContext.delete(model)
-        try? modelContext.save()
-    }
-
-    // MARK: - State helpers
-
-    func isDownloaded(_ catalogID: String) -> Bool {
+    private func fetchLocalModel(for catalogID: String) -> LocalModel? {
         let descriptor = FetchDescriptor<LocalModel>(
             predicate: #Predicate { $0.catalogID == catalogID }
-        )
-        return (try? modelContext.fetch(descriptor).first) != nil
-    }
-
-    func localModel(for catalogID: String) -> LocalModel? {
-        let descriptor = FetchDescriptor<LocalModel>(
-            predicate: #Predicate { $0.catalogID == catalogID }
-        )
-        return try? modelContext.fetch(descriptor).first
-    }
-
-    func downloadedModels() -> [LocalModel] {
-        (try? modelContext.fetch(FetchDescriptor<LocalModel>())) ?? []
-    }
-
-    // MARK: - Private helpers
-
-    private func fetchActiveModel() -> LocalModel? {
-        let descriptor = FetchDescriptor<LocalModel>(
-            predicate: #Predicate { $0.isActive == true }
         )
         return try? modelContext.fetch(descriptor).first
     }
 
     private func modelsDirectory() -> URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let dir = docs.appendingPathComponent("Models")
+        let dir  = docs.appendingPathComponent("Models")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
     private func hfRawURL(repoID: String, filename: String) -> URL {
-        // HuggingFace CDN URL pattern
         let encoded = filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? filename
         return URL(string: "https://huggingface.co/\(repoID)/resolve/main/\(encoded)")!
     }
 
-    // Fetch model file list from HuggingFace API
     private func fetchFileList(repoID: String) async throws -> [String] {
         let apiURL = URL(string: "https://huggingface.co/api/models/\(repoID)")!
         let (data, _) = try await URLSession.shared.data(from: apiURL)
@@ -183,9 +195,8 @@ final class ModelManager {
 
         let model = try JSONDecoder().decode(HFModel.self, from: data)
 
-        // Only download files needed for MLX inference
-        let needed = model.siblings.map(\.rfilename).filter { filename in
-            let ext = (filename as NSString).pathExtension
+        return model.siblings.map(\.rfilename).filter { filename in
+            let ext  = (filename as NSString).pathExtension
             let name = (filename as NSString).lastPathComponent
             return ext == "safetensors" ||
                    ext == "json" ||
@@ -193,7 +204,6 @@ final class ModelManager {
                    name == "special_tokens_map.json" ||
                    name == "generation_config.json"
         }
-        return needed
     }
 
     private func downloadFile(
@@ -204,15 +214,17 @@ final class ModelManager {
         totalFiles: Int
     ) async throws {
         let (tempURL, response) = try await URLSession.shared.download(from: url)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
             throw ModelError.downloadFailed("HTTP error for \(url.lastPathComponent)")
         }
         try FileManager.default.moveItem(at: tempURL, to: destination)
-
         let fileProgress = Double(fileIndex + 1) / Double(totalFiles)
         downloads[catalogID]?.progress = fileProgress
     }
 }
+
+// MARK: - ModelError
 
 enum ModelError: LocalizedError {
     case downloadFailed(String)
@@ -222,8 +234,8 @@ enum ModelError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .downloadFailed(let msg): return "Download failed: \(msg)"
-        case .loadFailed(let msg): return "Could not load model: \(msg)"
-        case .noModelSelected: return "No model selected. Go to Models tab to download one."
+        case .loadFailed(let msg):     return "Could not load model: \(msg)"
+        case .noModelSelected:         return "AI model not ready. Please wait for setup to complete."
         }
     }
 }

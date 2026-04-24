@@ -28,8 +28,9 @@ final class AppContainer: ObservableObject {
         let spotlight = SpotlightService()
         self.spotlightService = spotlight
 
-        self.llmService = LLMService()
-        self.modelManager = ModelManager(modelContext: context)
+        self.llmService   = LLMService()
+        let manager       = ModelManager(modelContext: context)
+        self.modelManager = manager
 
         let gcal = GoogleCalendarService()
         self.googleCalendarService = gcal
@@ -39,22 +40,32 @@ final class AppContainer: ObservableObject {
             searchEngine: search,
             spotlightService: spotlight,
             llmService: self.llmService,
+            modelManager: manager,
             googleCalendarService: gcal
         )
 
         let builder = ContextBuilder(searchEngine: search)
         self.contextBuilder = builder
 
-        self.reminderService = ReminderCreationService()
+        self.reminderService      = ReminderCreationService()
         self.calendarEventService = CalendarEventCreationService()
     }
+
+    // MARK: - Bootstrap
 
     func bootstrap() async {
         await indexingService.loadSearchCache()
     }
 
+    /// Loads the chat model if it is downloaded and not yet in memory.
+    func loadChatModelIfNeeded() async {
+        guard !llmService.isReady,
+              let chatLocalModel = modelManager.chatModel else { return }
+        await llmService.loadModel(from: chatLocalModel)
+    }
+
+    // Keep old name as an alias so call-sites compile without change.
     func loadActiveModelIfNeeded() async {
-        guard !llmService.isReady, let active = modelManager.activeModel else { return }
-        await llmService.loadModel(from: active)
+        await loadChatModelIfNeeded()
     }
 }

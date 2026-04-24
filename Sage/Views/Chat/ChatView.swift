@@ -220,15 +220,15 @@ struct ChatView: View {
 
     private var noModelWarning: some View {
         VStack(spacing: 16) {
-            Image(systemName: "cpu").font(.system(size: 52)).foregroundStyle(.secondary)
-            Text("No model loaded").font(Theme.titleFont)
-            Text("Go to the Models tab to download a local AI model. Llama 3.2 3B is a great starting point.")
+            Image(systemName: "arrow.down.circle")
+                .font(.system(size: 52))
+                .foregroundStyle(.secondary)
+            Text("Setting up AI models…").font(Theme.titleFont)
+            Text("Sage is downloading its AI models in the background. This usually takes a few minutes on Wi-Fi.")
                 .font(Theme.bodyFont).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("Open Models") {
-                NotificationCenter.default.post(name: .switchToModelsTab, object: nil)
-            }
-            .buttonStyle(SageButtonStyle())
+            ProgressView(value: container.modelManager.overallProgress)
+                .padding(.horizontal, 40)
         }
     }
 

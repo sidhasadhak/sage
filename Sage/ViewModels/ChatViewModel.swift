@@ -20,6 +20,7 @@ final class ChatViewModel {
     private let contextBuilder: ContextBuilder
     private let indexingService: IndexingService
     private var conversation: Conversation?
+    private var conversationPersisted = false   // false until first message is sent
     private let modelContext: ModelContext
 
     var isGenerating: Bool { llmService.isGenerating }
@@ -40,17 +41,18 @@ final class ChatViewModel {
     func loadOrCreateConversation(_ conversation: Conversation?) {
         if let conversation {
             self.conversation = conversation
+            self.conversationPersisted = true
             self.messages = conversation.messages.sorted { $0.createdAt < $1.createdAt }
         } else {
-            startNewConversation()
+            // Prepare an unsaved placeholder — only written to SwiftData on first send.
+            // This means opening a blank chat and backing out leaves zero ghost records.
+            prepareNewConversation()
         }
     }
 
-    func startNewConversation() {
-        let conv = Conversation()
-        modelContext.insert(conv)
-        try? modelContext.save()
-        conversation = conv
+    func prepareNewConversation() {
+        conversation = Conversation()   // not inserted into SwiftData yet
+        conversationPersisted = false
         messages = []
         streamingText = ""
     }
@@ -58,6 +60,15 @@ final class ChatViewModel {
     func send(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let conversation else { return }
+        // Prevent re-entrant generation — double-tap guard.
+        guard !llmService.isGenerating else { return }
+
+        // Persist the conversation on the very first message send.
+        if !conversationPersisted {
+            modelContext.insert(conversation)
+            try? modelContext.save()
+            conversationPersisted = true
+        }
 
         pendingAction = nil
         photoAssetIDs = []

@@ -14,6 +14,11 @@ final class MemoryChunk {
     var isSpotlightIndexed: Bool
     var sourceDate: Date?
 
+    /// Knowledge-graph entities extracted by the LLM (optional feature).
+    /// Format: "type:name" e.g. ["person:John Smith", "place:Paris", "project:Q4"]
+    /// nil = not yet processed. Empty array = processed but no entities found.
+    var entities: [String]?
+
     @Relationship(deleteRule: .nullify)
     var note: Note?
 
