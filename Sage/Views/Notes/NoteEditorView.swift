@@ -1,7 +1,11 @@
 import SwiftUI
+import SwiftData
 
 struct NoteEditorView: View {
     @Environment(\.dismiss) var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject var container: AppContainer
+
     let note: Note?
     var viewModel: NotesViewModel?
 
@@ -71,10 +75,28 @@ struct NoteEditorView: View {
     }
 
     private func save() {
-        if let note {
-            viewModel?.saveNote(note, title: title, body: bodyText)
+        if let viewModel {
+            // Standard path: viewModel handles save + re-index.
+            if let note {
+                viewModel.saveNote(note, title: title, body: bodyText)
+            } else {
+                _ = viewModel.createNote(title: title, body: bodyText)
+            }
         } else {
-            _ = viewModel?.createNote(title: title, body: bodyText)
+            // Fallback path: opened from Memory tab without a viewModel (e.g. MemoryBrowserView).
+            // Persist directly and re-index so changes are not silently discarded.
+            if let note {
+                note.title = title
+                note.body = bodyText
+                note.updatedAt = Date()
+                try? modelContext.save()
+                Task { await container.indexingService.indexNote(note) }
+            } else {
+                let note = Note(title: title, body: bodyText)
+                modelContext.insert(note)
+                try? modelContext.save()
+                Task { await container.indexingService.indexNote(note) }
+            }
         }
         dismiss()
     }

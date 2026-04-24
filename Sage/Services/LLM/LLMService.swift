@@ -171,6 +171,14 @@ final class LLMService {
         return ModelCatalog.isVisionCapable(for: id)
     }
 
+    /// True only when the active model is a dedicated photo-analysis model (e.g. SmolVLM 256M).
+    /// Main chat vision models must NOT be used for batch photo captioning at index time —
+    /// they are too heavy to run sequentially on a large photo library without crashing.
+    var isPhotoAnalysisModelActive: Bool {
+        guard let id = loadedModelID else { return false }
+        return ModelCatalog.isPhotoAnalysisModel(for: id)
+    }
+
     // MARK: - Generation
 
     func generate(

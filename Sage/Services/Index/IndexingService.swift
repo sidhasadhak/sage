@@ -50,10 +50,13 @@ final class IndexingService: ObservableObject {
         guard !isIndexing else { return }
         isIndexing = true
 
-        // When the LLM model changes, photo captions become stale (vision capability may differ).
-        // Clear photo chunks and reset the delta so they're re-captioned with the new model.
+        // When the dedicated photo-analysis model changes, captions may differ.
+        // Only clear photo chunks when the photo-analysis model specifically changes —
+        // changing the main chat model no longer triggers a full photo re-index.
         let storedModelID = UserDefaults.standard.string(forKey: DeltaKeys.modelID)
-        if let currentModelID, currentModelID != storedModelID {
+        if let currentModelID,
+           currentModelID != storedModelID,
+           ModelCatalog.isPhotoAnalysisModel(for: currentModelID) {
             await clearChunks(ofType: .photo)
             UserDefaults.standard.removeObject(forKey: DeltaKeys.photos)
         }
@@ -75,6 +78,11 @@ final class IndexingService: ObservableObject {
         await indexContacts()
         await indexCalendar()
         await indexPhotos()
+        await indexAllNotes()   // ← was missing; notes never picked up by "Index Now"
+
+        // Knowledge graph entity extraction (optional, runs last so it never blocks core data).
+        let graphEnabled = UserDefaults.standard.bool(forKey: "knowledge_graph_enabled")
+        if graphEnabled { await buildEntityGraph() }
     }
 
     // Removes all cached chunks of a given type so they'll be re-indexed on the next run.
@@ -272,8 +280,18 @@ final class IndexingService: ObservableObject {
 
     // MARK: - Photos
 
+    /// Max photos processed per indexing run. Delta key ensures the next run
+    /// continues from where this one left off (photos are fetched newest-first,
+    /// so the delta timestamp naturally advances each run).
+    private let maxPhotosPerRun = 75
+
+    /// Shared geocoder instance — CLGeocoder is rate-limited by the OS;
+    /// creating one per photo can trigger errors and wastes memory.
+    private let geocoder = CLGeocoder()
+
     func indexPhotos() async {
         let fetchOptions = PHFetchOptions()
+        // Newest first so the most recent photos are captured first within the batch cap.
         fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
 
         // Delta: only photos newer than the last run. On first run, use the period window.
@@ -284,11 +302,12 @@ final class IndexingService: ObservableObject {
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
 
-        // Collect first, then process sequentially — firing concurrent Tasks for every
-        // asset causes hundreds of simultaneous image loads + LLM calls, spiking to OOM.
         var assetList: [PHAsset] = []
         assets.enumerateObjects { asset, _, _ in assetList.append(asset) }
-        for asset in assetList {
+
+        // Cap per-run to avoid unbounded GPU/memory use on large libraries.
+        let batch = Array(assetList.prefix(maxPhotosPerRun))
+        for asset in batch {
             await upsertPhotoChunk(asset, dateFormatter: dateFormatter)
         }
     }
@@ -296,20 +315,33 @@ final class IndexingService: ObservableObject {
     private func upsertPhotoChunk(_ asset: PHAsset, dateFormatter: DateFormatter) async {
         let date = asset.creationDate.map { dateFormatter.string(from: $0) } ?? "unknown date"
 
-        // Try vision captioning if a vision model is active
+        // Vision captioning ONLY runs with a dedicated photo-analysis model (e.g. SmolVLM 256M).
+        // Using the main chat LLM (4B+) for sequential captioning of hundreds of photos causes
+        // GPU memory pressure and crashes on-device. SmolVLM is intentionally lightweight so it
+        // can run safely in the background without competing with the active session.
         var caption: String? = nil
-        if let llm = llmService, llm.isVisionCapable {
+        if let llm = llmService, llm.isPhotoAnalysisModelActive {
             let options = PHImageRequestOptions()
             options.isSynchronous = false
-            options.deliveryMode = .highQualityFormat
+            options.deliveryMode = .fastFormat   // fastFormat is enough for captioning
             options.isNetworkAccessAllowed = false
-            let image = await withCheckedContinuation { continuation in
+            let image: UIImage? = await withCheckedContinuation { continuation in
+                var resumed = false
                 PHImageManager.default().requestImage(
                     for: asset,
                     targetSize: CGSize(width: 256, height: 256),
                     contentMode: .aspectFit,
                     options: options
-                ) { image, _ in continuation.resume(returning: image) }
+                ) { image, info in
+                    // requestImage can call back multiple times (degraded → full quality).
+                    // Only resume once.
+                    guard !resumed else { return }
+                    let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+                    if !isDegraded || image != nil {
+                        resumed = true
+                        continuation.resume(returning: image)
+                    }
+                }
             }
             if let image {
                 caption = try? await llm.generateCaption(for: image)
@@ -318,8 +350,11 @@ final class IndexingService: ObservableObject {
 
         var parts = [caption ?? "Photo taken on \(date)"]
 
+        // Geocoding: use the shared instance and only attempt if the asset has location data.
+        // Add a small inter-request delay to stay within OS rate limits.
         if let location = asset.location {
             do {
+                try await Task.sleep(nanoseconds: 300_000_000) // 0.3 s between geocode calls
                 let locationStr: String
                 if #available(iOS 26, *),
                    let request = MKReverseGeocodingRequest(location: location) {
@@ -328,13 +363,15 @@ final class IndexingService: ObservableObject {
                     locationStr = [placemark?.locality, placemark?.administrativeArea, placemark?.country]
                         .compactMap { $0 }.joined(separator: ", ")
                 } else {
-                    let placemarks = try await CLGeocoder().reverseGeocodeLocation(location)
+                    let placemarks = try await geocoder.reverseGeocodeLocation(location)
                     let place = placemarks.first
                     locationStr = [place?.locality, place?.administrativeArea, place?.country]
                         .compactMap { $0 }.joined(separator: ", ")
                 }
                 if !locationStr.isEmpty { parts.append("at \(locationStr)") }
-            } catch {}
+            } catch {
+                // Geocoding failed (rate-limit, network, cancelled) — skip location silently.
+            }
         }
 
         let content = parts.joined(separator: " ")
@@ -383,6 +420,38 @@ final class IndexingService: ObservableObject {
         if let chunk = note.memoryChunk {
             Task { await searchEngine.removeFromCache(id: chunk.id) }
             modelContext.delete(chunk)
+        }
+    }
+
+    /// Indexes all notes that exist in the store. Called by indexAll() so that
+    /// "Index Now" in Settings picks up notes that were created before indexing
+    /// was wired up, or notes that missed the reactive save path.
+    func indexAllNotes() async {
+        let descriptor = FetchDescriptor<Note>()
+        guard let notes = try? modelContext.fetch(descriptor) else { return }
+        for note in notes {
+            await indexNote(note)
+        }
+    }
+
+    // MARK: - Knowledge Graph
+
+    /// Iterates chunks that have no entities yet and extracts them via the LLM.
+    /// Processes in small batches to stay memory-friendly.
+    /// Skips silently when the LLM is not ready.
+    private func buildEntityGraph() async {
+        guard let llm = llmService, llm.isReady else { return }
+        let descriptor = FetchDescriptor<MemoryChunk>()
+        guard let chunks = try? modelContext.fetch(descriptor) else { return }
+        let pending = chunks.filter { $0.entities == nil }
+        let batchSize = 20
+        for batchStart in stride(from: 0, to: pending.count, by: batchSize) {
+            let slice = Array(pending[batchStart..<min(batchStart + batchSize, pending.count)])
+            for chunk in slice {
+                let entities = await llm.extractEntities(from: chunk.content)
+                if !entities.isEmpty { chunk.entities = entities }
+            }
+            try? modelContext.save()
         }
     }
 
