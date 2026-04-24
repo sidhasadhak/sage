@@ -12,6 +12,9 @@ struct CatalogModel: Identifiable, Hashable {
     let tags: [Tag]
     let minimumRAMGB: Int
     let isVisionCapable: Bool
+    /// When true this model is shown in the Photo Analysis section, not the main chat list.
+    /// It runs at index-time only to generate stored photo descriptions any chat model can then read.
+    let isPhotoAnalysisModel: Bool
 
     enum Tag: String {
         case recommended = "Recommended"
@@ -27,13 +30,14 @@ struct CatalogModel: Identifiable, Hashable {
         id: String, displayName: String, family: String, description: String,
         parameterCount: String, sizeGB: Double, contextLength: Int,
         quantization: String, tags: [Tag], minimumRAMGB: Int,
-        isVisionCapable: Bool
+        isVisionCapable: Bool, isPhotoAnalysisModel: Bool = false
     ) {
         self.id = id; self.displayName = displayName; self.family = family
         self.description = description; self.parameterCount = parameterCount
         self.sizeGB = sizeGB; self.contextLength = contextLength
         self.quantization = quantization; self.tags = tags
         self.minimumRAMGB = minimumRAMGB; self.isVisionCapable = isVisionCapable
+        self.isPhotoAnalysisModel = isPhotoAnalysisModel
     }
 
     var localDirectoryName: String {
@@ -151,11 +155,34 @@ enum ModelCatalog {
         ),
     ]
 
+    /// Dedicated photo-analysis models — downloaded separately, used only at index time.
+    /// Produces stored text descriptions that any chat model can then read at query time.
+    static let photoAnalysis: [CatalogModel] = [
+        CatalogModel(
+            id: "mlx-community/SmolVLM-256M-Instruct-bf16",
+            displayName: "SmolVLM · 256M",
+            family: "SmolVLM",
+            description: "Tiny vision model (256 M params, ~0.5 GB). Downloads once and runs at index time to generate rich photo descriptions stored alongside each photo — enabling any text-only model to search your photos by content.",
+            parameterCount: "256M",
+            sizeGB: 0.5,
+            contextLength: 4096,
+            quantization: "bf16",
+            tags: [.compact, .vision],
+            minimumRAMGB: 4,
+            isVisionCapable: true,
+            isPhotoAnalysisModel: true
+        ),
+    ]
+
     static func model(for id: String) -> CatalogModel? {
-        all.first { $0.id == id }
+        (all + photoAnalysis).first { $0.id == id }
     }
 
     static func isVisionCapable(for catalogID: String) -> Bool {
-        all.first { $0.id == catalogID }?.isVisionCapable ?? false
+        (all + photoAnalysis).first { $0.id == catalogID }?.isVisionCapable ?? false
+    }
+
+    static func isPhotoAnalysisModel(for catalogID: String) -> Bool {
+        photoAnalysis.first { $0.id == catalogID } != nil
     }
 }

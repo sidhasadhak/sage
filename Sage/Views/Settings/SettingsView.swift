@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage("app_color_scheme") private var colorSchemeRaw: String = AppColorScheme.system.rawValue
     @AppStorage("sage_user_name") private var userName: String = ""
     @AppStorage("indexing_period_months") private var indexingPeriodMonths: Int = 3
+    @AppStorage("knowledge_graph_enabled") private var knowledgeGraphEnabled: Bool = false
     @State private var showIndexConfirm = false
     @State private var showClearConfirm = false
     @State private var isIndexing = false
@@ -145,6 +146,33 @@ struct SettingsView: View {
                     Text("Memory Index")
                 } footer: {
                     Text("Items already indexed are kept unless you switch AI models, which re-indexes photos to use the new model's vision capabilities.")
+                }
+
+                // MARK: — Knowledge Graph
+                Section {
+                    Toggle(isOn: $knowledgeGraphEnabled) {
+                        Label("Knowledge Graph", systemImage: "point.3.connected.trianglepath.dotted")
+                    }
+                    .tint(Color.accentColor)
+
+                    if knowledgeGraphEnabled {
+                        HStack {
+                            Label("Photo Analysis Model", systemImage: "camera.viewfinder")
+                            Spacer()
+                            NavigationLink("Models") {
+                                ModelLibraryView()
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Knowledge Graph")
+                } footer: {
+                    Text(knowledgeGraphEnabled
+                         ? "Sage will extract named entities (people, places, projects) from your memories after each index run and show connections on memory cards. Download SmolVLM in the Models tab to label photos without needing your chat model to be vision-capable."
+                         : "Optional. When enabled, Sage builds a graph of connections between your memories — people, places, and projects that appear across notes, events, and photos."
+                    )
                 }
 
                 // MARK: — Danger Zone

@@ -14,6 +14,11 @@ final class MemoryChunk {
     var isSpotlightIndexed: Bool
     var sourceDate: Date?
 
+    /// Knowledge graph entities extracted by the LLM (optional feature).
+    /// Format: "type:name" e.g. ["person:John Smith", "place:Paris", "project:Q4 Launch"]
+    /// Empty array when the knowledge graph feature is disabled or not yet processed.
+    var entities: [String]
+
     @Relationship(deleteRule: .nullify)
     var note: Note?
 
@@ -34,6 +39,7 @@ final class MemoryChunk {
         self.updatedAt = Date()
         self.isSpotlightIndexed = false
         self.sourceDate = sourceDate
+        self.entities = []
     }
 
     var openURL: URL? {
