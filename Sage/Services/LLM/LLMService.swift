@@ -240,6 +240,45 @@ final class LLMService {
         )
     }
 
+    // Extracts named entities from a memory chunk for the knowledge graph.
+    // Returns strings in "type:name" format e.g. ["person:John Smith", "place:Paris"].
+    // Does NOT change observable state — safe to call alongside active sessions.
+    func extractEntities(from content: String) async -> [String] {
+        guard case .ready = state, let container = modelContainer else { return [] }
+        do {
+            let chatMessages: [Chat.Message] = [
+                .system("You are a precise named-entity extractor. Output only valid JSON."),
+                .user("""
+                Extract named entities from the text below.
+                Types: person, place, project, organization, concept.
+                Use canonical short names (e.g. "John" not "John said that he…").
+                Return ONLY JSON: {"entities": ["person:John Smith", "place:Paris"]}
+                Max 5 entities. If none, return {"entities": []}.
+
+                Text: \(content.prefix(600))
+                """)
+            ]
+            let params = GenerateParameters(maxTokens: 120, temperature: 0.1, topP: 0.9)
+            let lmInput = try await container.prepare(input: UserInput(chat: chatMessages))
+            let stream = try await container.generate(input: lmInput, parameters: params)
+            var output = ""
+            for await generation in stream {
+                if case .chunk(let t) = generation { output += t }
+            }
+            if let start = output.firstIndex(of: "{"),
+               let end = output.lastIndex(of: "}"),
+               let data = String(output[start...end]).data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let raw = json["entities"] as? [String] {
+                let result = raw
+                    .map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { $0.contains(":") && $0.count < 60 }
+                return Array(result.prefix(5))
+            }
+        } catch {}
+        return []
+    }
+
     // Extracts up to 10 context-aware labels from text using the loaded model.
     // Does NOT change observable state — safe to call alongside active chat sessions.
     func generateLabels(for text: String) async -> [String] {
