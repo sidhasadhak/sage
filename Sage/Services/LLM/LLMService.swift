@@ -166,6 +166,11 @@ final class LLMService {
 
     var isGenerating: Bool { state == .generating }
 
+    /// Prevents two background MLX calls (extractEntities, generateLabels, generateCaption)
+    /// from racing each other. Background functions bail immediately when this is true;
+    /// the user-facing generate() is unaffected — it uses state = .generating as its lock.
+    private var isBackgroundProcessing = false
+
     var isVisionCapable: Bool {
         guard let id = loadedModelID else { return false }
         return ModelCatalog.isVisionCapable(for: id)
@@ -188,6 +193,19 @@ final class LLMService {
     ) async throws -> String {
         guard let container = modelContainer else {
             throw ModelError.noModelSelected
+        }
+
+        // If a background task (entity extraction, labelling, captioning) is mid-flight
+        // past its prepare() call, wait up to 3 s for it to finish before proceeding.
+        // isBackgroundProcessing is cleared by each background function's defer block.
+        if isBackgroundProcessing {
+            var waited = 0
+            while isBackgroundProcessing && waited < 30 {
+                try await Task.sleep(nanoseconds: 100_000_000) // 0.1 s
+                waited += 1
+            }
+            // If still stuck after 3 s, force-clear and proceed — user request wins.
+            isBackgroundProcessing = false
         }
 
         state = .generating
@@ -242,9 +260,12 @@ final class LLMService {
 
     // Extracts named entities from a memory chunk for the knowledge graph.
     // Returns strings in "type:name" format e.g. ["person:John Smith", "place:Paris"].
-    // Does NOT change observable state — safe to call alongside active sessions.
+    // Background-safe: bails immediately if the model is busy with another call.
     func extractEntities(from content: String) async -> [String] {
-        guard case .ready = state, let container = modelContainer else { return [] }
+        // Bail if model is not ready OR another background call is in flight.
+        guard case .ready = state, !isBackgroundProcessing, let container = modelContainer else { return [] }
+        isBackgroundProcessing = true
+        defer { isBackgroundProcessing = false }
         do {
             let chatMessages: [Chat.Message] = [
                 .system("You are a precise named-entity extractor. Output only valid JSON."),
@@ -260,6 +281,9 @@ final class LLMService {
             ]
             let params = GenerateParameters(maxTokens: 120, temperature: 0.1, topP: 0.9)
             let lmInput = try await container.prepare(input: UserInput(chat: chatMessages))
+            // Re-check after the suspension — user may have started chatting during prepare().
+            // If state changed to .generating, container.generate() would race and crash MLX.
+            guard case .ready = state else { return [] }
             let stream = try await container.generate(input: lmInput, parameters: params)
             var output = ""
             for await generation in stream {
@@ -280,9 +304,11 @@ final class LLMService {
     }
 
     // Extracts up to 10 context-aware labels from text using the loaded model.
-    // Does NOT change observable state — safe to call alongside active chat sessions.
+    // Background-safe: bails immediately if the model is busy with another call.
     func generateLabels(for text: String) async -> [String] {
-        guard case .ready = state, let container = modelContainer else { return [] }
+        guard case .ready = state, !isBackgroundProcessing, let container = modelContainer else { return [] }
+        isBackgroundProcessing = true
+        defer { isBackgroundProcessing = false }
         do {
             let chatMessages: [Chat.Message] = [
                 .system("You are a concise label extractor. You only return comma-separated labels."),
@@ -296,6 +322,8 @@ final class LLMService {
             ]
             let params = GenerateParameters(maxTokens: 80, temperature: 0.2, topP: 0.9)
             let lmInput = try await container.prepare(input: UserInput(chat: chatMessages))
+            // Re-check after suspension — bail if user started chatting during prepare().
+            guard case .ready = state else { return [] }
             let stream = try await container.generate(input: lmInput, parameters: params)
             var output = ""
             for await generation in stream {
@@ -315,13 +343,16 @@ final class LLMService {
         #if targetEnvironment(simulator)
         return "Photo captured on device"
         #else
-        guard let container = modelContainer else { throw ModelError.noModelSelected }
+        guard case .ready = state, !isBackgroundProcessing,
+              let container = modelContainer else { throw ModelError.noModelSelected }
         guard isVisionCapable else {
             throw ModelError.loadFailed("Active model does not support vision")
         }
         guard let ciImage = CIImage(image: image) else {
             throw ModelError.loadFailed("Could not process image")
         }
+        isBackgroundProcessing = true
+        defer { isBackgroundProcessing = false }
         let userInput = UserInput(chat: [
             .user(
                 "Describe what you see in this photo. Include the scene, objects, people, colours, location, activities, and mood. Be concise but specific.",
@@ -330,6 +361,8 @@ final class LLMService {
         ])
         let params = GenerateParameters(maxTokens: 200, temperature: 0.3, topP: 0.9)
         let lmInput = try await container.prepare(input: userInput)
+        // Re-check after suspension — bail if user started chatting during prepare().
+        guard case .ready = state else { throw ModelError.noModelSelected }
         let stream = try await container.generate(input: lmInput, parameters: params)
         var output = ""
         for await generation in stream {
