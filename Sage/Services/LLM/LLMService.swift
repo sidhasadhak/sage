@@ -264,6 +264,102 @@ final class LLMService {
         }
     }
 
+    // Analyzes a voice transcription and returns a structured intent.
+    // Does NOT change observable state — safe to call alongside active chat sessions.
+    func analyzeVoiceIntent(transcription: String) async -> VoiceIntent {
+        let fallback = VoiceIntent(
+            action: .saveNote(title: "Voice Note", body: transcription),
+            labels: [],
+            summary: "Saved as a note.",
+            transcription: transcription
+        )
+        guard case .ready = state, let container = modelContainer else { return fallback }
+
+        let today = ISO8601DateFormatter().string(from: Date())
+        let prompt = """
+        Analyze this voice note and determine the single best action to take. Today is \(today).
+
+        Voice note: "\(transcription)"
+
+        Respond with ONLY a valid JSON object — no explanation, no markdown fences:
+        {
+          "action": "save_note" | "create_list" | "create_reminder" | "create_event" | "chat",
+          "title": "concise title",
+          "body": "full note text (save_note only)",
+          "items": ["item 1", "item 2"],
+          "due_date": "ISO8601 string or null",
+          "notes": "extra context (create_reminder only, optional)",
+          "start_date": "ISO8601 string or null",
+          "location": "place name or null",
+          "question": "exact question for chat (chat only)",
+          "labels": ["tag1", "tag2"],
+          "summary": "One sentence: what Sage will do."
+        }
+        """
+
+        do {
+            let chatMessages: [Chat.Message] = [
+                .system("You are a precise JSON-only voice intent parser. Output only valid JSON."),
+                .user(prompt)
+            ]
+            let params = GenerateParameters(maxTokens: 350, temperature: 0.1, topP: 0.9)
+            let lmInput = try await container.prepare(input: UserInput(chat: chatMessages))
+            let stream = try await container.generate(input: lmInput, parameters: params)
+            var output = ""
+            for await generation in stream {
+                if case .chunk(let t) = generation { output += t }
+            }
+            if let jsonStr = extractFirstJSON(from: output),
+               let data = jsonStr.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                return parseVoiceIntent(json: json, transcription: transcription)
+            }
+        } catch {}
+        return fallback
+    }
+
+    private func extractFirstJSON(from text: String) -> String? {
+        guard let start = text.firstIndex(of: "{"),
+              let end = text.lastIndex(of: "}") else { return nil }
+        return String(text[start...end])
+    }
+
+    private func parseVoiceIntent(json: [String: Any], transcription: String) -> VoiceIntent {
+        let actionStr = json["action"]  as? String ?? "save_note"
+        let title     = (json["title"]  as? String ?? "Voice Note").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawLabels = json["labels"]  as? [String] ?? []
+        let labels    = Array(rawLabels.map { $0.lowercased() }.filter { !$0.isEmpty && $0.count < 40 }.prefix(10))
+        let summary   = json["summary"] as? String ?? ""
+        let iso       = ISO8601DateFormatter()
+
+        let action: VoiceIntent.Action
+        switch actionStr {
+        case "create_list":
+            let items = (json["items"] as? [String] ?? []).filter { !$0.isEmpty }
+            action = .createList(title: title, items: items)
+
+        case "create_reminder":
+            let dueDate = (json["due_date"] as? String).flatMap { iso.date(from: $0) }
+            let notes   = json["notes"] as? String
+            action = .createReminder(title: title, dueDate: dueDate, notes: notes)
+
+        case "create_event":
+            let startDate = (json["start_date"] as? String).flatMap { iso.date(from: $0) }
+            let location  = json["location"] as? String
+            action = .createCalendarEvent(title: title, startDate: startDate, location: location)
+
+        case "chat":
+            let q = (json["question"] as? String ?? transcription).trimmingCharacters(in: .whitespacesAndNewlines)
+            action = .chat(question: q.isEmpty ? transcription : q)
+
+        default:
+            let body = (json["body"] as? String ?? transcription).trimmingCharacters(in: .whitespacesAndNewlines)
+            action = .saveNote(title: title, body: body.isEmpty ? transcription : body)
+        }
+
+        return VoiceIntent(action: action, labels: labels, summary: summary, transcription: transcription)
+    }
+
     func generateCaption(for image: UIImage) async throws -> String {
         #if targetEnvironment(simulator)
         return "Photo captured on device"
