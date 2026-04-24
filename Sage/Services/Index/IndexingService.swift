@@ -457,7 +457,7 @@ final class IndexingService: ObservableObject {
         guard let llm = llmService, llm.isReady else { return }
         let descriptor = FetchDescriptor<MemoryChunk>()
         guard let chunks = try? modelContext.fetch(descriptor) else { return }
-        let pending = chunks.filter { $0.entities.isEmpty }
+        let pending = chunks.filter { $0.entities == nil }
         let batchSize = 20
         for batch in stride(from: 0, to: pending.count, by: batchSize) {
             let slice = Array(pending[batch..<min(batch + batchSize, pending.count)])

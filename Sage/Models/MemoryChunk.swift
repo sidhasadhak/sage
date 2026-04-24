@@ -16,8 +16,9 @@ final class MemoryChunk {
 
     /// Knowledge graph entities extracted by the LLM (optional feature).
     /// Format: "type:name" e.g. ["person:John Smith", "place:Paris", "project:Q4 Launch"]
-    /// Empty array when the knowledge graph feature is disabled or not yet processed.
-    var entities: [String]
+    /// Nil when not yet processed; empty array when processed but none found.
+    /// Optional so SwiftData can migrate existing rows without a migration plan.
+    var entities: [String]?
 
     @Relationship(deleteRule: .nullify)
     var note: Note?
@@ -39,7 +40,7 @@ final class MemoryChunk {
         self.updatedAt = Date()
         self.isSpotlightIndexed = false
         self.sourceDate = sourceDate
-        self.entities = []
+        self.entities = nil
     }
 
     var openURL: URL? {

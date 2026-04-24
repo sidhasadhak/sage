@@ -7,7 +7,7 @@ struct MemoryChunkRow: View {
     @AppStorage("knowledge_graph_enabled") private var graphEnabled = false
 
     private var displayEntities: [EntityPill.Model] {
-        chunk.entities.prefix(3).compactMap { raw -> EntityPill.Model? in
+        (chunk.entities ?? []).prefix(3).compactMap { raw -> EntityPill.Model? in
             let parts = raw.split(separator: ":", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { return nil }
             return EntityPill.Model(type: parts[0], name: parts[1])

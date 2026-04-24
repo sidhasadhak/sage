@@ -16,7 +16,28 @@ struct SageApp: App {
             LocalModel.self
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-        let modelContainer = try! ModelContainer(for: schema, configurations: [config])
+
+        // Attempt to open the store. If the schema has changed incompatibly
+        // (e.g. a field was added without a migration plan), delete the store
+        // and retry with a fresh one rather than crashing.
+        let modelContainer: ModelContainer
+        do {
+            modelContainer = try ModelContainer(for: schema, configurations: [config])
+        } catch {
+            print("[Sage] ModelContainer failed (\(error)). Deleting store and retrying.")
+            if let storeURL = config.url {
+                try? FileManager.default.removeItem(at: storeURL)
+                // Also remove adjacent WAL/SHM files
+                for ext in ["-wal", "-shm"] {
+                    let sidecar = storeURL.deletingPathExtension()
+                        .appendingPathExtension(storeURL.pathExtension + ext)
+                    try? FileManager.default.removeItem(at: sidecar)
+                }
+            }
+            // swiftlint:disable:next force_try
+            modelContainer = try! ModelContainer(for: schema, configurations: [config])
+        }
+
         let appContainer = AppContainer(modelContainer: modelContainer)
         container = appContainer
 
