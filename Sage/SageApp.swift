@@ -25,14 +25,13 @@ struct SageApp: App {
             modelContainer = try ModelContainer(for: schema, configurations: [config])
         } catch {
             print("[Sage] ModelContainer failed (\(error)). Deleting store and retrying.")
-            if let storeURL = config.url {
-                try? FileManager.default.removeItem(at: storeURL)
-                // Also remove adjacent WAL/SHM files
-                for ext in ["-wal", "-shm"] {
-                    let sidecar = storeURL.deletingPathExtension()
-                        .appendingPathExtension(storeURL.pathExtension + ext)
-                    try? FileManager.default.removeItem(at: sidecar)
-                }
+            let storeURL = config.url
+            try? FileManager.default.removeItem(at: storeURL)
+            // Also remove adjacent WAL/SHM sidecar files
+            for ext in ["-wal", "-shm"] {
+                let sidecar = storeURL.deletingPathExtension()
+                    .appendingPathExtension(storeURL.pathExtension + ext)
+                try? FileManager.default.removeItem(at: sidecar)
             }
             // swiftlint:disable:next force_try
             modelContainer = try! ModelContainer(for: schema, configurations: [config])
