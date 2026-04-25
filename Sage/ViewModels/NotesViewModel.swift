@@ -56,6 +56,24 @@ final class NotesViewModel {
         return note
     }
 
+    /// Creates a voice note when the transcription is already available
+    /// (the voice-recorder UI transcribes once during intent analysis, so we
+    /// avoid running TranscriptionService a second time here).
+    @discardableResult
+    func createVoiceNote(audioURL: URL?, transcription: String, title: String? = nil) -> Note {
+        let resolvedTitle = title ?? "Voice Note – \(shortTitle(from: transcription))"
+        let note = Note(title: resolvedTitle, body: transcription, isVoiceNote: audioURL != nil)
+        if let audioURL {
+            let docsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            note.audioFileRelativePath = audioURL.path.replacingOccurrences(of: docsURL.path + "/", with: "")
+        }
+        note.transcription = transcription
+        modelContext.insert(note)
+        try? modelContext.save()
+        Task { await indexingService.indexNote(note) }
+        return note
+    }
+
     func createChecklist(title: String, items: [ChecklistItem]) {
         let note = Note(title: title, isVoiceNote: false)
         note.isChecklist = true

@@ -56,6 +56,15 @@ struct ChatView: View {
             )
             vm.loadOrCreateConversation(conversation)
             viewModel = vm
+
+            // Pre-populate the input field if the voice recorder routed a
+            // transcription here as a chat query. We clear the property so
+            // navigating away & back doesn't re-fire it.
+            if let query = container.pendingVoiceChatQuery {
+                inputText = query
+                isInputFocused = true
+                container.pendingVoiceChatQuery = nil
+            }
         }
     }
 

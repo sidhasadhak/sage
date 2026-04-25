@@ -79,6 +79,16 @@ struct CalendarMemoryView: View {
                 weekdayHeader
                 monthGrid
                     .padding(.horizontal, 6)
+                    // Horizontal swipe on the grid pages between months. We
+                    // attach the gesture to the grid rather than the whole
+                    // ScrollView so vertical scrolling to the day-detail
+                    // panel still works smoothly.
+                    .gesture(monthSwipeGesture)
+                    .id(displayedMonth)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal:   .move(edge: .leading).combined(with: .opacity)
+                    ))
 
                 // Selected-day detail — slides in below the grid
                 if !selectedDayChunks.isEmpty {
@@ -95,6 +105,20 @@ struct CalendarMemoryView: View {
                 .presentationDragIndicator(.visible)
         }
         .animation(.easeInOut(duration: 0.25), value: selectedDayKey)
+        .animation(.easeInOut(duration: 0.25), value: displayedMonth)
+    }
+
+    /// Drag gesture that pages the calendar by month. We require a meaningful
+    /// horizontal distance and a horizontal-dominant motion so it doesn't
+    /// fight with vertical scroll.
+    private var monthSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 28)
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard abs(dx) > abs(dy) * 1.5, abs(dx) > 50 else { return }
+                advance(by: dx < 0 ? 1 : -1)
+            }
     }
 
     // MARK: - Month header
@@ -141,7 +165,11 @@ struct CalendarMemoryView: View {
 
     private var weekdayHeader: some View {
         HStack(spacing: 0) {
-            ForEach(weekdaySymbols, id: \.self) { sym in
+            // Index-keyed because `veryShortStandaloneWeekdaySymbols` repeats
+            // letters (S/M/T/W/T/F/S — both T's and both S's collide). Using
+            // `id: \.self` here would give duplicate IDs and SwiftUI would
+            // log "undefined results" plus mis-recycle the Text views.
+            ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, sym in
                 Text(sym)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -303,7 +331,7 @@ private struct DayCell: View {
                     }
                     Text("\(dayNumber)")
                         .font(.system(size: 13, weight: isToday || hasContent ? .semibold : .regular))
-                        .foregroundStyle(isToday ? .white : isCurrentMonth ? .primary : .tertiary)
+                        .foregroundStyle(isToday ? Color.white : isCurrentMonth ? Color.primary : Color.secondary.opacity(0.4))
                 }
 
                 // Type dots

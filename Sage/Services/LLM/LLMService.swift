@@ -358,6 +358,246 @@ final class LLMService {
         }
     }
 
+    // MARK: - Voice intent classification
+
+    /// Classifies a voice transcription into a `VoiceIntent`. Uses the chat
+    /// model when ready; otherwise falls back to keyword-based heuristics so
+    /// the UX is consistent regardless of whether the model has been loaded
+    /// yet (the chat model is lazy-loaded on first Chat-tab visit).
+    ///
+    /// Always returns *something* — never throws. Caller renders the result
+    /// in a preview UI for the user to confirm.
+    func analyzeVoiceIntent(transcription: String) async -> VoiceIntent {
+        let cleaned = transcription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else {
+            return VoiceIntent(kind: .note, title: "Voice Note",
+                               transcription: cleaned, summary: "Saved as a note")
+        }
+
+        // Fall back to heuristics if the model isn't ready.
+        guard case .ready = state, !isBackgroundProcessing,
+              let container = modelContainer else {
+            return Self.heuristicIntent(for: cleaned)
+        }
+
+        isBackgroundProcessing = true
+        defer { isBackgroundProcessing = false }
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        let nowISO = isoFormatter.string(from: Date())
+
+        let userPrompt = """
+        Today is \(nowISO).
+
+        Read this voice transcription and classify what the user wants. Reply with ONLY a single JSON object — no prose, no code fences.
+
+        Schema:
+        {
+          "intent": "note" | "checklist" | "reminder" | "calendar_event" | "chat",
+          "title": "short title (max 60 chars)",
+          "items": ["only for checklist intent — list each item"],
+          "due_iso": "ISO 8601 datetime, only for reminder intent, null if no time",
+          "start_iso": "ISO 8601 datetime, only for calendar_event intent, null if no time",
+          "summary": "one short sentence telling the user what you will do"
+        }
+
+        Rules for picking the intent:
+        - "checklist": ANY list of things (shopping, groceries, packing, to-dos, tasks, items to buy/get/bring/pack).
+        - "reminder": "remind me", "don't forget", "remember to", or an explicit future task with no meeting context.
+        - "calendar_event": meetings, appointments, events at a specific time with other people.
+        - "chat": questions, requests for information, anything that wants Sage to answer.
+        - "note": general thoughts, observations, journal entries — the default if nothing else fits.
+
+        Examples:
+        Transcription: "Create a shopping list with milk, eggs, and bread"
+        → {"intent":"checklist","title":"Shopping List","items":["Milk","Eggs","Bread"],"summary":"I'll create a shopping list with 3 items."}
+
+        Transcription: "Remind me to call mom tomorrow at 5pm"
+        → {"intent":"reminder","title":"Call mom","due_iso":"<tomorrow 17:00 ISO>","summary":"I'll set a reminder for tomorrow at 5 PM."}
+
+        Transcription: "Schedule a meeting with the design team Friday at 2"
+        → {"intent":"calendar_event","title":"Meeting with design team","start_iso":"<Friday 14:00 ISO>","summary":"I'll add this to your calendar."}
+
+        Transcription: "What did I do last weekend?"
+        → {"intent":"chat","title":"What did I do last weekend?","summary":"I'll look this up for you in Sage."}
+
+        Transcription: "Had lunch with Sarah at the park, weather was great"
+        → {"intent":"note","title":"Lunch with Sarah","summary":"I'll save this as a note."}
+
+        Transcription: "\(cleaned.prefix(500))"
+        """
+
+        do {
+            let chatMessages: [Chat.Message] = [
+                .system("You classify voice transcriptions and return ONLY valid JSON. No commentary."),
+                .user(userPrompt)
+            ]
+            let params  = GenerateParameters(maxTokens: 220, temperature: 0.1, topP: 0.9)
+            let lmInput = try await container.prepare(input: UserInput(chat: chatMessages))
+
+            guard case .ready = state else { return Self.heuristicIntent(for: cleaned) }
+
+            let stream = try await container.generate(input: lmInput, parameters: params)
+            var output = ""
+            for await generation in stream {
+                if case .chunk(let t) = generation { output += t }
+            }
+
+            if let parsed = Self.parseIntentJSON(output, transcription: cleaned) {
+                return parsed
+            }
+        } catch {
+            // fall through
+        }
+        return Self.heuristicIntent(for: cleaned)
+    }
+
+    /// Extract first JSON object from `raw` and decode into a `VoiceIntent`.
+    private static func parseIntentJSON(_ raw: String, transcription: String) -> VoiceIntent? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let start = trimmed.firstIndex(of: "{"),
+              let end   = trimmed.lastIndex(of: "}"),
+              start < end else { return nil }
+
+        let jsonStr = String(trimmed[start...end])
+        guard let data = jsonStr.data(using: .utf8),
+              let obj  = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+
+        let intent  = (obj["intent"] as? String ?? "note").lowercased()
+        let title   = (obj["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                      ?? heuristicTitle(from: transcription)
+        let summary = (obj["summary"] as? String) ?? "Saved"
+
+        let isoParser = ISO8601DateFormatter()
+        isoParser.formatOptions = [.withInternetDateTime]
+        let isoFractional = ISO8601DateFormatter()
+        isoFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        func parseDate(_ key: String) -> Date? {
+            guard let s = obj[key] as? String, !s.isEmpty, s.lowercased() != "null" else { return nil }
+            return isoParser.date(from: s) ?? isoFractional.date(from: s)
+        }
+
+        let kind: VoiceIntent.Kind
+        switch intent {
+        case "checklist":
+            let items = (obj["items"] as? [String])?
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty } ?? []
+            kind = .checklist(items: items.isEmpty ? [transcription] : items)
+        case "reminder":
+            kind = .reminder(dueDate: parseDate("due_iso"))
+        case "calendar_event", "calendarevent", "event":
+            kind = .calendarEvent(startDate: parseDate("start_iso"))
+        case "chat":
+            kind = .chat
+        default:
+            kind = .note
+        }
+
+        return VoiceIntent(kind: kind, title: String(title.prefix(80)),
+                           transcription: transcription, summary: summary)
+    }
+
+    /// Pure-Swift fallback used when the chat model isn't loaded yet, or the
+    /// model returns unparsable output. Mirrors the LLM rules with simple
+    /// keyword matching plus `NSDataDetector` for date extraction.
+    private static func heuristicIntent(for text: String) -> VoiceIntent {
+        let lower = text.lowercased()
+
+        // Date detection (shared by reminder + calendar paths).
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
+        let range    = NSRange(text.startIndex..., in: text)
+        let date     = detector?.matches(in: text, options: [], range: range).first?.date
+
+        // Calendar event triggers
+        let eventKeywords = ["schedule a meeting", "schedule meeting", "set up a meeting",
+                             "book a meeting", "create an event", "add to calendar",
+                             "schedule an event", "book appointment", "create appointment",
+                             "set up a call", "book a call"]
+        if eventKeywords.contains(where: { lower.contains($0) }) {
+            return VoiceIntent(
+                kind: .calendarEvent(startDate: date),
+                title: heuristicTitle(from: text),
+                transcription: text,
+                summary: "I'll add this to your calendar."
+            )
+        }
+
+        // Reminder triggers
+        let reminderKeywords = ["remind me", "reminder to", "don't forget", "remember to",
+                                "add reminder", "set reminder", "set a reminder"]
+        if reminderKeywords.contains(where: { lower.contains($0) }) {
+            return VoiceIntent(
+                kind: .reminder(dueDate: date),
+                title: heuristicTitle(from: text),
+                transcription: text,
+                summary: date == nil ? "I'll set a reminder." : "I'll set a reminder for that time."
+            )
+        }
+
+        // Checklist triggers
+        let checklistKeywords = ["shopping list", "grocery list", "to-do list", "todo list",
+                                 "to do list", "checklist", "packing list",
+                                 "make a list", "create a list", "list of"]
+        if checklistKeywords.contains(where: { lower.contains($0) }) {
+            return VoiceIntent(
+                kind: .checklist(items: extractListItems(from: text)),
+                title: heuristicTitle(from: text),
+                transcription: text,
+                summary: "I'll create a checklist."
+            )
+        }
+
+        // Question → chat
+        if text.contains("?") || lower.hasPrefix("what ") || lower.hasPrefix("when ")
+            || lower.hasPrefix("where ") || lower.hasPrefix("who ") || lower.hasPrefix("why ")
+            || lower.hasPrefix("how ") {
+            return VoiceIntent(
+                kind: .chat,
+                title: String(text.prefix(60)),
+                transcription: text,
+                summary: "I'll ask Sage about this."
+            )
+        }
+
+        return VoiceIntent(
+            kind: .note,
+            title: heuristicTitle(from: text),
+            transcription: text,
+            summary: "I'll save this as a note."
+        )
+    }
+
+    private static func extractListItems(from text: String) -> [String] {
+        // Split on commas, "and", newlines.
+        let separators = CharacterSet(charactersIn: ",\n;")
+        let cleaned = text
+            .replacingOccurrences(of: " and ", with: ",", options: .caseInsensitive)
+            .replacingOccurrences(of: ":", with: ",")
+        let pieces = cleaned.components(separatedBy: separators)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && $0.count < 80 }
+
+        // Drop any piece that contains a list-trigger phrase (likely the prefix).
+        let stripPhrases = ["shopping list", "grocery list", "to-do list", "todo list",
+                            "to do list", "checklist", "packing list", "make a list",
+                            "create a list", "list of"]
+        let items = pieces.filter { piece in
+            let lower = piece.lowercased()
+            return !stripPhrases.contains(where: { lower.contains($0) })
+        }
+        return items.isEmpty ? pieces : items
+    }
+
+    private static func heuristicTitle(from text: String) -> String {
+        let words = text.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .prefix(8)
+            .joined(separator: " ")
+        return words.isEmpty ? "Voice Note" : String(words.prefix(60))
+    }
+
     func generateCaption(for image: UIImage) async throws -> String {
         #if targetEnvironment(simulator)
         return "Photo captured on device"
@@ -376,7 +616,16 @@ final class LLMService {
 
         let userInput = UserInput(chat: [
             .user(
-                "Describe what you see in this photo. Include the scene, objects, people, colours, location, activities, and mood. Be concise but specific.",
+                """
+                Describe this photo for search. In ONE compact paragraph (≤80 words), list:
+                • Scene / setting (indoor or outdoor, type of place).
+                • Objects, animals, vehicles, food visible.
+                • People (count, approximate ages, what they are doing) — never invent names.
+                • Any visible text, signs, license plates, numbers, brands.
+                • Colours, lighting, weather, time of day if obvious.
+                • Activity or event happening.
+                Be specific and factual. No opinions, no metaphors, no "I see".
+                """,
                 images: [.ciImage(ciImage)]
             )
         ])

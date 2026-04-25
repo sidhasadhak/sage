@@ -4,6 +4,11 @@ import SwiftData
 
 @MainActor
 final class AppContainer: ObservableObject {
+    /// Set by the voice recorder when the classifier decides the user is
+    /// asking Sage a question. ChatListView consumes this on appear and
+    /// opens a new chat pre-populated with the transcription.
+    @Published var pendingVoiceChatQuery: String?
+
     let modelContainer: ModelContainer
     let permissions: PermissionCoordinator
     let searchEngine: SemanticSearchEngine

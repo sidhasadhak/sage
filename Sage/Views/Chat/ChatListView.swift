@@ -11,25 +11,22 @@ struct ChatListView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if conversations.isEmpty {
-                    emptyState
-                } else {
-                    conversationList
-                }
-            }
-            .navigationTitle("Sage")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        selectedConversation = nil
-                        showingChat = true
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                            .fontWeight(.semibold)
+            ZStack(alignment: .bottomTrailing) {
+                Group {
+                    if conversations.isEmpty {
+                        emptyState
+                    } else {
+                        conversationList
                     }
                 }
+
+                // Floating new-chat button — replaces the top-right toolbar
+                // pencil so the primary action is reachable one-handed.
+                newChatFAB
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 20)
             }
+            .navigationTitle("Sage")
             .navigationDestination(isPresented: $showingChat) {
                 ChatView(conversation: selectedConversation)
                     .environmentObject(container)
@@ -41,8 +38,35 @@ struct ChatListView: View {
                     try? await Task.sleep(for: .seconds(1))
                     await container.loadChatModelIfNeeded()
                 }
+                // If the voice recorder routed a transcription here, open a
+                // fresh chat so ChatView can read & clear the pending query.
+                if container.pendingVoiceChatQuery != nil {
+                    selectedConversation = nil
+                    showingChat = true
+                }
+            }
+            .onChange(of: container.pendingVoiceChatQuery) { _, query in
+                guard query != nil else { return }
+                selectedConversation = nil
+                showingChat = true
             }
         }
+    }
+
+    private var newChatFAB: some View {
+        Button {
+            selectedConversation = nil
+            showingChat = true
+        } label: {
+            Image(systemName: "square.and.pencil")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(Color.accentColor)
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
+        }
+        .accessibilityLabel("New chat")
     }
 
     private var emptyState: some View {

@@ -193,18 +193,18 @@ struct SettingsView: View {
             } message: {
                 Text("This may take a few minutes. Sage will be fully usable during indexing.")
             }
-            .confirmationDialog(
+            .alert(
                 "Clear all memories?",
-                isPresented: $showClearConfirm,
-                titleVisibility: .visible
+                isPresented: $showClearConfirm
             ) {
+                Button("Cancel", role: .cancel) {}
                 Button("Clear Memory", role: .destructive) {
                     Task {
-                        await container.searchEngine.invalidateCache()
-                        await container.spotlightService.removeAll()
+                        await container.indexingService.clearAllMemories()
                     }
                 }
-                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This removes every indexed photo, note, event, and reminder from Sage's memory. Your originals are not affected. You can re-index anytime.")
             }
         }
     }

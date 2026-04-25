@@ -23,8 +23,11 @@ final class IndexingService: ObservableObject {
     // Shared geocoder — reusing a single instance avoids rate-limit errors.
     private let geocoder = CLGeocoder()
 
-    // Maximum photos captioned per indexing run to prevent OOM / timeout.
-    private let maxPhotosPerRun = 75
+    // Photos are indexed in small batches with explicit yields between each
+    // batch so the GPU can release tile memory and the OS can reclaim cache.
+    // No caps — every photo in the indexing period is processed; we just
+    // pace the work so a large library doesn't trigger OOM.
+    private let photoBatchSize = 10
 
     private enum DeltaKeys {
         static let photos   = "delta.lastPhotosIndexedAt"
@@ -92,12 +95,47 @@ final class IndexingService: ObservableObject {
             scheduleBackgroundIndex()
         }
 
-        await indexContacts()
+        // Order matters: lightweight, no-model sources first. Photos go last
+        // so the Vision (SmolVLM) model is loaded only after every other
+        // source has been indexed and the GPU is otherwise idle.
         await indexCalendar()
         await indexAllNotes()
+        await Task.yield()
         // Vision captioning (SmolVLM swap) only runs in background — avoids OOM during
         // foreground use where both models would briefly compete for GPU RAM.
         await indexPhotos(enableCaptioning: isBackgroundRun)
+    }
+
+    // MARK: - Clear all memories
+
+    /// Wipes every indexed `MemoryChunk` from SwiftData, resets all delta
+    /// trackers, clears the in-memory search cache, and removes Spotlight
+    /// entries. After this returns, the Memory tab shows the empty state.
+    func clearAllMemories() async {
+        // 1. Delete all MemoryChunk rows from SwiftData.
+        let descriptor = FetchDescriptor<MemoryChunk>()
+        if let all = try? modelContext.fetch(descriptor) {
+            for chunk in all { modelContext.delete(chunk) }
+            try? modelContext.save()
+        }
+        // 2. Detach any Note → MemoryChunk references that survived the delete.
+        let noteDescriptor = FetchDescriptor<Note>()
+        if let notes = try? modelContext.fetch(noteDescriptor) {
+            for note in notes { note.memoryChunk = nil }
+            try? modelContext.save()
+        }
+        // 3. Reset semantic search cache + Spotlight.
+        await searchEngine.invalidateCache()
+        await spotlightService.removeAll()
+        // 4. Reset delta trackers so the next indexing pass starts fresh.
+        UserDefaults.standard.removeObject(forKey: DeltaKeys.photos)
+        UserDefaults.standard.removeObject(forKey: DeltaKeys.contacts)
+        UserDefaults.standard.removeObject(forKey: DeltaKeys.calendar)
+        UserDefaults.standard.removeObject(forKey: DeltaKeys.modelID)
+        UserDefaults.standard.removeObject(forKey: "lastIndexedAt")
+        // 5. Reset on-screen counters.
+        indexedCount = 0
+        lastIndexedAt = nil
     }
 
     private func clearChunks(ofType type: MemoryChunk.SourceType) async {
@@ -272,28 +310,32 @@ final class IndexingService: ObservableObject {
 
     // MARK: - Photos
 
-    /// Indexes photos from the library.
-    /// - Parameter enableCaptioning: When `true` (background only), loads SmolVLM to generate
-    ///   semantic captions. Kept `false` during foreground runs to prevent OOM from a
-    ///   two-model swap while Llama is already in GPU RAM.
+    /// Indexes photos from the library, walking month-by-month from newest
+    /// to oldest within the configured indexing period. Each month is
+    /// processed as its own small batch; we yield between months so the GPU
+    /// can release tile memory and SwiftData can flush. Without this
+    /// per-month structure the previous flat-cap approach indexed only the
+    /// most recent photos — older months in the period never got reached.
+    ///
+    /// - Parameter enableCaptioning: When `true` (background only), loads
+    ///   SmolVLM to generate semantic captions. Kept `false` during
+    ///   foreground runs to prevent OOM from a two-model swap while Llama
+    ///   is already in GPU RAM.
     func indexPhotos(enableCaptioning: Bool = false) async {
-        let fetchOptions = PHFetchOptions()
-        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        let cal       = Calendar.current
+        let now       = Date()
+        let monthSpan = indexingPeriodMonths
 
-        let since = UserDefaults.standard.object(forKey: DeltaKeys.photos) as? Date ?? periodStartDate
-        fetchOptions.predicate = NSPredicate(format: "creationDate > %@", since as CVarArg)
-
-        let assets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
-
-        var assetList: [PHAsset] = []
-        assets.enumerateObjects { asset, _, _ in assetList.append(asset) }
-        // Cap per run to prevent OOM / BGTask timeout
-        let limited = Array(assetList.prefix(maxPhotosPerRun))
+        // Build [start, end) ranges, newest month first.
+        var monthRanges: [(start: Date, end: Date)] = []
+        for offset in 0..<monthSpan {
+            guard let monthEnd   = cal.date(byAdding: .month, value: -offset, to: now),
+                  let monthStart = cal.date(byAdding: .month, value: -1, to: monthEnd) else { continue }
+            monthRanges.append((start: monthStart, end: monthEnd))
+        }
 
         // ─── SmolVLM swap-in (background only) ────────────────────────────
-        // Only attempt when explicitly enabled (BGProcessingTask). During foreground
-        // indexing we skip captions entirely — the device already has Llama in RAM
-        // and loading SmolVLM on top risks hitting the memory limit.
+        // Done once up front so we don't churn the GPU between months.
         var didSwapToPhotoModel = false
         if enableCaptioning,
            let llm = llmService,
@@ -303,8 +345,10 @@ final class IndexingService: ObservableObject {
            !llm.isBackgroundProcessing {
 
             if llm.loadedModelID != ModelCatalog.photoAnalysisModel.id {
-                // Unload Llama first to free GPU RAM, then load SmolVLM.
                 llm.unloadModel()
+                // Brief pause so unload's MLX cache flush completes before
+                // we start allocating fresh weights for SmolVLM.
+                try? await Task.sleep(nanoseconds: 200_000_000)
                 await llm.loadModel(from: photoLocalModel)
                 didSwapToPhotoModel = llm.loadedModelID == ModelCatalog.photoAnalysisModel.id
             } else {
@@ -316,8 +360,39 @@ final class IndexingService: ObservableObject {
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
 
-        for asset in limited {
-            await upsertPhotoChunk(asset, dateFormatter: dateFormatter)
+        // Walk every month in the period and process every photo in each
+        // month — no caps. Photos are processed in small batches with a
+        // yield + brief sleep between each batch so the GPU can release
+        // tile memory and SwiftData can flush; this keeps memory steady on
+        // libraries with thousands of photos without dropping any.
+        for range in monthRanges {
+            let opts = PHFetchOptions()
+            opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+            opts.predicate = NSPredicate(
+                format: "creationDate >= %@ AND creationDate < %@",
+                range.start as CVarArg, range.end as CVarArg
+            )
+            let result = PHAsset.fetchAssets(with: .image, options: opts)
+            var monthAssets: [PHAsset] = []
+            result.enumerateObjects { a, _, _ in monthAssets.append(a) }
+
+            // Process this month's photos in fixed-size batches.
+            var batchStart = 0
+            while batchStart < monthAssets.count {
+                let batchEnd = min(batchStart + photoBatchSize, monthAssets.count)
+                for i in batchStart..<batchEnd {
+                    await upsertPhotoChunk(monthAssets[i], dateFormatter: dateFormatter)
+                }
+                batchStart = batchEnd
+
+                // Pace between batches so the GPU/SwiftData can recover.
+                await Task.yield()
+                try? await Task.sleep(nanoseconds: 80_000_000)
+            }
+
+            // Slightly longer pause between months — gives the OS a wider
+            // window to reclaim memory before we start the next month.
+            try? await Task.sleep(nanoseconds: 150_000_000)
         }
 
         // ─── Restore chat model (background only) ─────────────────────────
@@ -325,6 +400,7 @@ final class IndexingService: ObservableObject {
            let llm = llmService,
            let chatLocalModel = modelManager?.chatModel {
             llm.unloadModel()
+            try? await Task.sleep(nanoseconds: 200_000_000)
             await llm.loadModel(from: chatLocalModel)
         }
         // ──────────────────────────────────────────────────────────────────
@@ -332,6 +408,27 @@ final class IndexingService: ObservableObject {
 
     private func upsertPhotoChunk(_ asset: PHAsset, dateFormatter: DateFormatter) async {
         let date = asset.creationDate.map { dateFormatter.string(from: $0) } ?? "unknown date"
+
+        // Skip if we've already captioned this asset — the per-month walk
+        // re-visits old months on every run, so without this guard we'd
+        // re-run the VLM over the entire library each pass.
+        // Two cases let us skip:
+        //   1. The chunk already has a substantial caption (>40 chars beyond
+        //      the trivial "Photo taken on …" fallback), regardless of model.
+        //   2. The VLM isn't loaded right now — generating a fresh caption
+        //      would only produce the same trivial fallback we already have.
+        let assetID = asset.localIdentifier
+        let existingDescriptor = FetchDescriptor<MemoryChunk>(
+            predicate: #Predicate { $0.sourceID == assetID }
+        )
+        if let existing = try? modelContext.fetch(existingDescriptor).first,
+           !existing.content.isEmpty {
+            let trivialPrefix = "Photo taken on"
+            let hasRealCaption = !existing.content.hasPrefix(trivialPrefix)
+                || existing.content.count > 60
+            let vlmActive = llmService?.isPhotoAnalysisModelActive == true
+            if hasRealCaption || !vlmActive { return }
+        }
 
         // Caption via SmolVLM — only when the photo-analysis model is active.
         var caption: String? = nil
@@ -398,9 +495,15 @@ final class IndexingService: ObservableObject {
 
     // MARK: - Notes
 
-    /// Re-indexes all notes from SwiftData (called on every full index pass).
+    /// Re-indexes notes from SwiftData. Only notes created/updated within
+    /// the configured indexing period are indexed — older notes stay in the
+    /// app but aren't part of the active memory index, matching the user's
+    /// expectation that the period scope applies uniformly.
     func indexAllNotes() async {
-        let descriptor = FetchDescriptor<Note>()
+        let cutoff = periodStartDate
+        let descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { $0.updatedAt >= cutoff }
+        )
         guard let notes = try? modelContext.fetch(descriptor) else { return }
         for note in notes { await indexNote(note) }
     }

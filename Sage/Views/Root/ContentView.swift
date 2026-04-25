@@ -27,6 +27,11 @@ struct ContentView: View {
             // when the user actually navigates to Chat. Loading at launch would spike
             // memory before the UI has settled, risking an OOM termination.
         }
+        .onChange(of: container.pendingVoiceChatQuery) { _, query in
+            // Voice recorder routed a transcription to chat — switch to the
+            // Chat tab so ChatListView can pick it up and open a new chat.
+            if query != nil { selectedTab = 0 }
+        }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .background:

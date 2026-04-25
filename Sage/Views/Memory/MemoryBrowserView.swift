@@ -96,16 +96,37 @@ struct MemoryBrowserView: View {
     // MARK: - Computed
 
     var filteredChunks: [MemoryChunk] {
-        var chunks = allChunks
+        // After Clear-All, allChunks goes empty — short-circuit so we don't
+        // surface stale `searchResults` referencing deleted SwiftData rows.
+        guard !allChunks.isEmpty else { return [] }
+
+        // Contacts are intentionally excluded from the Memory tab — names
+        // already surface inside note/event/voice content via entity
+        // extraction, and a flat contact list adds noise.
+        let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let semanticResults = viewModel?.searchResults ?? []
+
+        // When the user is searching, prefer the semantic-search hit list
+        // (cosine + keyword + recency) over a plain text contains() filter.
+        // Falls through to the local filter only if the engine hasn't
+        // returned results yet (cold cache, or pre-async-tick).
+        var chunks: [MemoryChunk]
+        if !trimmedQuery.isEmpty, !semanticResults.isEmpty {
+            chunks = semanticResults
+        } else if !trimmedQuery.isEmpty {
+            chunks = allChunks.filter {
+                $0.content.localizedCaseInsensitiveContains(trimmedQuery) ||
+                $0.keywords.contains { $0.localizedCaseInsensitiveContains(trimmedQuery) }
+            }
+        } else {
+            chunks = allChunks
+        }
+
+        chunks = chunks.filter { $0.sourceType != .contact }
         if let type = selectedType {
             chunks = chunks.filter { $0.sourceType == type }
         }
-        if !searchText.isEmpty {
-            chunks = chunks.filter {
-                $0.content.localizedCaseInsensitiveContains(searchText) ||
-                $0.keywords.contains { $0.localizedCaseInsensitiveContains(searchText) }
-            }
-        }
+
         return chunks.sorted {
             let d0 = sortKey.date(for: $0), d1 = sortKey.date(for: $1)
             return sortAscending ? d0 < d1 : d0 > d1
@@ -239,7 +260,10 @@ struct MemoryBrowserView: View {
                     }
                 }
             }
-            .onChange(of: searchText) { _, _ in Task { await viewModel?.search() } }
+            .onChange(of: searchText) { _, newValue in
+                viewModel?.searchQuery = newValue
+                Task { await viewModel?.search() }
+            }
             .onChange(of: allChunks.count) { _, _ in autoExpandMostRecent() }
             .onChange(of: sortKey) { _, _ in resetExpansion() }
             .onChange(of: selectedType) { _, _ in resetExpansion() }
@@ -523,8 +547,11 @@ private struct IdentifiableString: Identifiable {
 }
 
 extension MemoryChunk.SourceType: CaseIterable {
+    // Contacts are intentionally omitted — names already surface inside
+    // notes/events/voice content via entity extraction. A flat contact
+    // list inside Memory adds noise without value.
     public static var allCases: [MemoryChunk.SourceType] = [
-        .photo, .contact, .event, .reminder, .note, .conversation, .email
+        .photo, .event, .reminder, .note, .conversation, .email
     ]
 }
 
