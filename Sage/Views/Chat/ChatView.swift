@@ -212,7 +212,10 @@ struct ChatView: View {
                 .foregroundStyle(.primary)
 
             VStack(spacing: 8) {
-                ForEach(suggestions, id: \.self) { suggestion in
+                // Defensive: if `suggestions` ever gains duplicates or becomes
+                // user-editable, id: \.self would collide. Offset is safe because
+                // this view never mutates the array.
+                ForEach(Array(suggestions.enumerated()), id: \.offset) { _, suggestion in
                     Button(suggestion) {
                         inputText = suggestion
                         isInputFocused = true
