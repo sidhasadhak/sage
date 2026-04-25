@@ -6,11 +6,41 @@ import Contacts
 import EventKit
 import BackgroundTasks
 
+/// Lightweight diagnostic record for the in-app Diagnostics screen.
+/// Intentionally tiny — we keep at most `IndexingService.logCapacity`
+/// entries in a ring buffer so this never grows unbounded.
+struct IndexingLogEntry: Identifiable, Equatable {
+    enum Severity { case info, warning, error }
+    let id = UUID()
+    let date: Date
+    let severity: Severity
+    let message: String
+}
+
 @MainActor
 final class IndexingService: ObservableObject {
     @Published private(set) var isIndexing = false
     @Published private(set) var indexedCount = 0
     @Published private(set) var lastIndexedAt: Date?
+
+    /// Surfaces the most recent indexing failure (nil until something fails).
+    /// Cleared on the next successful pass. Read by DiagnosticsView so users
+    /// can finally see *why* indexing stalled instead of guessing.
+    @Published private(set) var lastError: String?
+
+    /// Ring buffer of recent indexing events for the Diagnostics screen.
+    /// Writes are O(1); we trim from the head when capacity is exceeded.
+    @Published private(set) var recentLog: [IndexingLogEntry] = []
+    static let logCapacity = 100
+
+    func log(_ message: String, severity: IndexingLogEntry.Severity = .info) {
+        let entry = IndexingLogEntry(date: Date(), severity: severity, message: message)
+        recentLog.append(entry)
+        if recentLog.count > Self.logCapacity {
+            recentLog.removeFirst(recentLog.count - Self.logCapacity)
+        }
+        if severity == .error { lastError = message }
+    }
 
     private let modelContext: ModelContext
     private let embeddingService = EmbeddingService.shared
@@ -70,6 +100,8 @@ final class IndexingService: ObservableObject {
     func indexAll(currentModelID: String? = nil, isBackgroundRun: Bool = false) async {
         guard !isIndexing else { return }
         isIndexing = true
+        lastError = nil
+        log("Indexing started (\(isBackgroundRun ? "background" : "foreground"))")
 
         // When the chat model changes, photo captions become stale — clear and re-caption.
         let storedModelID = UserDefaults.standard.string(forKey: DeltaKeys.modelID)
@@ -90,6 +122,7 @@ final class IndexingService: ObservableObject {
                 UserDefaults.standard.set(currentModelID, forKey: DeltaKeys.modelID)
             }
             scheduleBackgroundIndex()
+            log("Indexing finished — \(indexedCount) chunks total")
         }
 
         // Order matters: lightweight, no-model sources first. Photos go last
@@ -133,6 +166,7 @@ final class IndexingService: ObservableObject {
         // 5. Reset on-screen counters.
         indexedCount = 0
         lastIndexedAt = nil
+        log("All memories cleared", severity: .warning)
     }
 
     private func clearChunks(ofType type: MemoryChunk.SourceType) async {
