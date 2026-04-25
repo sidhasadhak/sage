@@ -44,7 +44,17 @@ final class AppContainer: ObservableObject {
             modelManager: manager
         )
 
-        let builder = ContextBuilder(searchEngine: search)
+        // Token counter bridges ContextBuilder to the loaded LLM
+        // tokenizer. Weak capture — ContextBuilder must not retain
+        // LLMService since AppContainer owns both. Falls back to a
+        // character-based estimate when no model is loaded yet (cold
+        // start before ChatListView triggers `loadModel`).
+        let llm = self.llmService
+        let counter = TokenCounter { [weak llm] text in
+            if let n = await llm?.tokenCount(text) { return n }
+            return max(1, text.count / 3)
+        }
+        let builder = ContextBuilder(searchEngine: search, tokenCounter: counter)
         self.contextBuilder = builder
 
         self.reminderService      = ReminderCreationService()
