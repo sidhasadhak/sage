@@ -162,7 +162,11 @@ struct VoiceMemoryCaptureView: View {
                         .foregroundStyle(.secondary)
 
                     FlowLayout(spacing: 6) {
-                        ForEach(labels, id: \.self) { label in
+                        // LLM can return duplicate labels ("travel", "travel") which
+                        // would collide under id: \.self and cause undefined view
+                        // recycling. Offset is stable because this array is read-only
+                        // for the lifetime of the .done state.
+                        ForEach(Array(labels.enumerated()), id: \.offset) { _, label in
                             Text(label)
                                 .font(.caption)
                                 .padding(.horizontal, 10)
