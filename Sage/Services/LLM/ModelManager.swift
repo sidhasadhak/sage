@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import CryptoKit
 
 // Tracks per-model download state
 struct DownloadState {
@@ -131,18 +132,37 @@ final class ModelManager {
             let filesToDownload = try await fetchFileList(repoID: catalog.id)
             let total = filesToDownload.count
 
-            for (index, filename) in filesToDownload.enumerated() {
-                let fileURL  = hfRawURL(repoID: catalog.id, filename: filename)
-                let destFile = destDir.appendingPathComponent(filename)
+            for (index, file) in filesToDownload.enumerated() {
+                let fileURL  = hfRawURL(repoID: catalog.id, filename: file.filename)
+                let destFile = destDir.appendingPathComponent(file.filename)
 
-                // Resume support: skip files already on disk
-                if FileManager.default.fileExists(atPath: destFile.path) { continue }
+                // Resume support: skip files already on disk *only* if they pass
+                // the integrity check. A partially-written file from a prior
+                // crash would otherwise be silently treated as valid and the
+                // model would later load corrupted weights.
+                if FileManager.default.fileExists(atPath: destFile.path) {
+                    if try verifyChecksumIfAvailable(at: destFile, expected: file.expectedSHA256) {
+                        continue
+                    } else {
+                        try? FileManager.default.removeItem(at: destFile)
+                    }
+                }
 
                 downloads[catalog.id]?.phase    = .downloading
                 downloads[catalog.id]?.progress = Double(index) / Double(total)
 
                 try await downloadFile(from: fileURL, to: destFile,
                                        catalogID: catalog.id, fileIndex: index, totalFiles: total)
+
+                // Verify SHA-256 against the Hugging Face LFS metadata. Catches
+                // truncated downloads, MITM tampering, and HF storage corruption
+                // *before* the file is ever fed to MLX. On mismatch we delete
+                // the file so a redownload starts cleanly.
+                let ok = try verifyChecksumIfAvailable(at: destFile, expected: file.expectedSHA256)
+                if !ok {
+                    try? FileManager.default.removeItem(at: destFile)
+                    throw ModelError.checksumMismatch(file.filename)
+                }
             }
 
             downloads[catalog.id]?.phase = .extracting
@@ -184,26 +204,70 @@ final class ModelManager {
         return URL(string: "https://huggingface.co/\(repoID)/resolve/main/\(encoded)")!
     }
 
-    private func fetchFileList(repoID: String) async throws -> [String] {
-        let apiURL = URL(string: "https://huggingface.co/api/models/\(repoID)")!
+    /// Result of `fetchFileList`: filename plus an optional expected SHA-256
+    /// drawn from Hugging Face's LFS metadata. Small text files (config.json,
+    /// tokenizer.json) are typically not LFS-tracked, so `expectedSHA256`
+    /// will be nil and they're trusted via HTTPS only.
+    private struct RemoteFile {
+        let filename: String
+        let expectedSHA256: String?
+    }
+
+    private func fetchFileList(repoID: String) async throws -> [RemoteFile] {
+        // ?blobs=true asks HF to include LFS blob metadata (oid = SHA-256)
+        // for files that are LFS-tracked. Without it, `lfs` is omitted.
+        let apiURL = URL(string: "https://huggingface.co/api/models/\(repoID)?blobs=true")!
         let (data, _) = try await URLSession.shared.data(from: apiURL)
 
         struct HFModel: Decodable {
-            struct Sibling: Decodable { let rfilename: String }
+            struct LFS: Decodable { let oid: String? }
+            struct Sibling: Decodable {
+                let rfilename: String
+                let lfs: LFS?
+            }
             let siblings: [Sibling]
         }
 
         let model = try JSONDecoder().decode(HFModel.self, from: data)
 
-        return model.siblings.map(\.rfilename).filter { filename in
+        return model.siblings.compactMap { sib -> RemoteFile? in
+            let filename = sib.rfilename
             let ext  = (filename as NSString).pathExtension
             let name = (filename as NSString).lastPathComponent
-            return ext == "safetensors" ||
-                   ext == "json" ||
-                   name.hasPrefix("tokenizer") ||
-                   name == "special_tokens_map.json" ||
-                   name == "generation_config.json"
+            let keep = ext == "safetensors" ||
+                       ext == "json" ||
+                       name.hasPrefix("tokenizer") ||
+                       name == "special_tokens_map.json" ||
+                       name == "generation_config.json"
+            guard keep else { return nil }
+            // HF LFS oid is the SHA-256 of the original file, hex-encoded.
+            return RemoteFile(filename: filename, expectedSHA256: sib.lfs?.oid)
         }
+    }
+
+    // MARK: - Checksum verification
+
+    /// Verifies the SHA-256 of `file` matches `expected`. Streams the file in
+    /// 1 MB chunks so even multi-GB safetensors are hashed without loading
+    /// into memory. Returns `true` if `expected` is nil (nothing to check).
+    private nonisolated func verifyChecksumIfAvailable(at file: URL, expected: String?) throws -> Bool {
+        guard let expected, !expected.isEmpty else { return true }
+
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        let chunkSize = 1 << 20    // 1 MB
+        while autoreleasepool(invoking: {
+            let data = (try? handle.read(upToCount: chunkSize)) ?? Data()
+            if data.isEmpty { return false }
+            hasher.update(data: data)
+            return true
+        }) {}
+
+        let digest = hasher.finalize()
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return hex.caseInsensitiveCompare(expected) == .orderedSame
     }
 
     private func downloadFile(
@@ -230,12 +294,14 @@ enum ModelError: LocalizedError {
     case downloadFailed(String)
     case loadFailed(String)
     case noModelSelected
+    case checksumMismatch(String)
 
     var errorDescription: String? {
         switch self {
         case .downloadFailed(let msg): return "Download failed: \(msg)"
         case .loadFailed(let msg):     return "Could not load model: \(msg)"
         case .noModelSelected:         return "AI model not ready. Please wait for setup to complete."
+        case .checksumMismatch(let f): return "Integrity check failed for \(f). The file was deleted; tap retry to redownload."
         }
     }
 }
