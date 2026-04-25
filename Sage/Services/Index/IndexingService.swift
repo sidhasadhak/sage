@@ -49,9 +49,6 @@ final class IndexingService: ObservableObject {
     private weak var llmService: LLMService?
     private weak var modelManager: ModelManager?
 
-    // Shared geocoder — reusing a single instance avoids rate-limit errors.
-    private let geocoder = CLGeocoder()
-
     // Photos are indexed in small batches with explicit yields between each
     // batch so the GPU can release tile memory and the OS can reclaim cache.
     // No caps — every photo in the indexing period is processed; we just
@@ -464,24 +461,20 @@ final class IndexingService: ObservableObject {
 
         var parts = [caption ?? "Photo taken on \(date)"]
 
-        if let location = asset.location {
+        if let location = asset.location,
+           let request = MKReverseGeocodingRequest(location: location) {
+            // iOS 26+ MapKit reverse-geocoding. Deployment target is 26.4
+            // so the legacy CLGeocoder fallback is unreachable and was
+            // removed (CLGeocoder + CLPlacemark.* are deprecated in 26).
             do {
-                let locationStr: String
-                if #available(iOS 26, *),
-                   let request = MKReverseGeocodingRequest(location: location) {
-                    let items     = try await request.mapItems
-                    let placemark = items.first?.placemark
-                    locationStr   = [placemark?.locality, placemark?.administrativeArea, placemark?.country]
-                        .compactMap { $0 }.joined(separator: ", ")
-                } else {
-                    // 0.3s delay to respect CLGeocoder's 1-per-second rate limit.
-                    try? await Task.sleep(nanoseconds: 300_000_000)
-                    let placemarks = try await geocoder.reverseGeocodeLocation(location)
-                    let place      = placemarks.first
-                    locationStr    = [place?.locality, place?.administrativeArea, place?.country]
-                        .compactMap { $0 }.joined(separator: ", ")
+                let items = try await request.mapItems
+                // `MKMapItem.name` typically resolves to the city / locality
+                // for a reverse-geocoded coordinate, which is the granularity
+                // we want for memory captions. `placemark` and the CLPlacemark
+                // fields it exposes are deprecated in iOS 26.
+                if let name = items.first?.name, !name.isEmpty {
+                    parts.append("at \(name)")
                 }
-                if !locationStr.isEmpty { parts.append("at \(locationStr)") }
             } catch {}
         }
 

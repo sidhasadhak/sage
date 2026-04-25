@@ -52,7 +52,7 @@ struct CalendarMemoryView: View {
     }
 
     private var weekdaySymbols: [String] {
-        var symbols = cal.veryShortStandaloneWeekdaySymbols // S M T W T F S
+        let symbols = cal.veryShortStandaloneWeekdaySymbols // S M T W T F S
         let first = cal.firstWeekday - 1
         return Array(symbols[first...] + symbols[..<first])
     }

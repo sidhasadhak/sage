@@ -10,7 +10,14 @@ final class MemoryChunk {
     // rows. Indexes are cheap on writes (we upsert in batches) and
     // dramatically speed up the read paths in IndexingService and
     // SemanticSearchEngine.
-    #Index<MemoryChunk>([\.updatedAt], [\.sourceType], [\.sourceID], [\.sourceDate])
+    // Note: `sourceType` is intentionally NOT indexed. It's a Codable enum,
+    // which SwiftData persists via a transformer (a "composite" property),
+    // and `#Index` rejects composite properties at ModelContainer init with
+    // an `NSInvalidArgumentException: Can't create an index element with
+    // composite property`. Filtering by source type stays fast in practice
+    // because the result set is already narrowed by the indexed `updatedAt`
+    // / `sourceDate` columns before the predicate runs.
+    #Index<MemoryChunk>([\.updatedAt], [\.sourceID], [\.sourceDate])
 
     var id: UUID
     var sourceType: SourceType

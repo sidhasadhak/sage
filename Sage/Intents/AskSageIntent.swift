@@ -26,16 +26,20 @@ struct AskSageIntent: AppIntent {
     /// we open the app and let it stream into the chat UI.
     static var openAppWhenRun: Bool = true
 
+    // Note: the parameter must NOT be named `query` — that name is
+    // reserved by the AppIntents framework for `EntityQuery` parameters
+    // (AppEntity / AppEnum types) and triggers a "Invalid parameter type"
+    // diagnostic when used with a plain String.
     @Parameter(
         title: "Question",
         description: "What would you like to ask Sage?",
         requestValueDialog: "What's your question?"
     )
-    var query: String
+    var question: String
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return .result(dialog: "I didn't catch a question. Try again.")
         }
@@ -62,12 +66,17 @@ struct AskSageIntent: AppIntent {
 
 struct SageShortcutsProvider: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
+        // Phrase placeholders (`\(\.$param)`) only accept AppEntity / AppEnum
+        // parameters — a plain String parameter triggers "Invalid parameter
+        // type" at compile time. We keep the trigger phrases unparameterized;
+        // Siri will prompt the user for the question via `requestValueDialog`
+        // on AskSageIntent.$question after the phrase fires.
         AppShortcut(
             intent: AskSageIntent(),
             phrases: [
+                "Ask \(.applicationName)",
                 "Ask \(.applicationName) a question",
-                "Ask \(.applicationName) about \(\.$query)",
-                "Tell \(.applicationName) \(\.$query)"
+                "Talk to \(.applicationName)"
             ],
             shortTitle: "Ask Sage",
             systemImageName: "bubble.left.and.bubble.right.fill"
