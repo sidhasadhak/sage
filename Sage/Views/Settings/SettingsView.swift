@@ -164,6 +164,18 @@ struct SettingsView: View {
                     Text("Clears Sage's memory index. Your original photos, contacts, and calendar data are not affected.")
                 }
 
+                // MARK: — Diagnostics
+                Section {
+                    NavigationLink {
+                        DiagnosticsView()
+                            .environmentObject(container)
+                    } label: {
+                        Label("Diagnostics", systemImage: "stethoscope")
+                    }
+                } footer: {
+                    Text("See what's indexed, recent events, and on-disk model integrity. Useful for bug reports.")
+                }
+
                 // MARK: — About
                 Section("About") {
                     LabeledContent("Version", value: Bundle.main.appVersion)
