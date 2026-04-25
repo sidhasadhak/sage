@@ -23,6 +23,9 @@ struct ContentView: View {
         .task {
             await container.bootstrap()
             if userName.isEmpty { showNameSetup = true }
+            // Pull any pending Siri / Shortcuts / Action-Button query out of
+            // UserDefaults and route it through the existing voice-chat channel.
+            SageShortcutBridge.consumePending(into: container)
             // Model loading is intentionally deferred — it happens lazily in ChatListView
             // when the user actually navigates to Chat. Loading at launch would spike
             // memory before the UI has settled, risking an OOM termination.
@@ -44,6 +47,10 @@ struct ContentView: View {
             case .active:
                 evictionTask?.cancel()
                 evictionTask = nil
+                // Pick up any Shortcut/Siri query queued while we were
+                // backgrounded — covers the warm-launch path that .task
+                // (which only fires once) would otherwise miss.
+                SageShortcutBridge.consumePending(into: container)
                 // Do NOT reload here — ChatListView handles reloading when the user
                 // returns to the Chat tab, keeping memory usage demand-driven.
             default:
