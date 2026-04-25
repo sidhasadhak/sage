@@ -17,7 +17,6 @@ final class AppContainer: ObservableObject {
     let contextBuilder: ContextBuilder
     let llmService: LLMService
     let modelManager: ModelManager
-    let googleCalendarService: GoogleCalendarService
     let reminderService: ReminderCreationService
     let calendarEventService: CalendarEventCreationService
 
@@ -37,16 +36,12 @@ final class AppContainer: ObservableObject {
         let manager       = ModelManager(modelContext: context)
         self.modelManager = manager
 
-        let gcal = GoogleCalendarService()
-        self.googleCalendarService = gcal
-
         self.indexingService = IndexingService(
             modelContext: context,
             searchEngine: search,
             spotlightService: spotlight,
             llmService: self.llmService,
-            modelManager: manager,
-            googleCalendarService: gcal
+            modelManager: manager
         )
 
         let builder = ContextBuilder(searchEngine: search)
