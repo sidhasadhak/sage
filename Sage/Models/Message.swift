@@ -3,6 +3,10 @@ import Foundation
 
 @Model
 final class Message {
+    // Messages within a conversation are sorted by createdAt; an index
+    // here keeps that sort cheap as conversations grow long.
+    #Index<Message>([\.createdAt])
+
     var id: UUID
     var role: Role
     var content: String
