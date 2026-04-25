@@ -18,7 +18,6 @@ final class IndexingService: ObservableObject {
     private let spotlightService: SpotlightService
     private weak var llmService: LLMService?
     private weak var modelManager: ModelManager?
-    private weak var googleCalendarService: GoogleCalendarService?
 
     // Shared geocoder — reusing a single instance avoids rate-limit errors.
     private let geocoder = CLGeocoder()
@@ -50,15 +49,13 @@ final class IndexingService: ObservableObject {
         searchEngine: SemanticSearchEngine,
         spotlightService: SpotlightService,
         llmService: LLMService? = nil,
-        modelManager: ModelManager? = nil,
-        googleCalendarService: GoogleCalendarService? = nil
+        modelManager: ModelManager? = nil
     ) {
         self.modelContext = modelContext
         self.searchEngine = searchEngine
         self.spotlightService = spotlightService
         self.llmService = llmService
         self.modelManager = modelManager
-        self.googleCalendarService = googleCalendarService
         lastIndexedAt = UserDefaults.standard.object(forKey: "lastIndexedAt") as? Date
     }
 
@@ -232,10 +229,9 @@ final class IndexingService: ObservableObject {
             }
         }
 
-        if let gcal = googleCalendarService {
-            let gcalEvents = await gcal.syncedEvents(from: start, to: end)
-            for gcalEvent in gcalEvents { await upsertGCalEventChunk(gcalEvent) }
-        }
+        // Note: Google Calendar events added to the user's iOS account
+        // surface here through EventKit automatically — no third-party
+        // OAuth client required. (See quick-win #1: removed GoogleCalendarService.)
     }
 
     private func upsertEventChunk(_ event: EKEvent) async {
@@ -281,30 +277,6 @@ final class IndexingService: ObservableObject {
             keywords: [reminder.title].compactMap { $0 },
             quality: .fast,
             sourceDate: dueDate
-        )
-    }
-
-    private func upsertGCalEventChunk(_ event: GCalEvent) async {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-
-        let eventDate = event.start?.resolved
-        var parts     = ["Event: \(event.summary ?? "Untitled")"]
-        if let date = eventDate { parts.append("Date: \(formatter.string(from: date))") }
-        if let loc  = event.location,    !loc.isEmpty    { parts.append("Location: \(loc)") }
-        if let desc = event.description, !desc.isEmpty   { parts.append("Notes: \(desc.prefix(200))") }
-
-        let content  = parts.joined(separator: ". ")
-        let keywords = [event.summary, event.location].compactMap { $0 }.filter { !$0.isEmpty }
-
-        await upsertChunk(
-            sourceType: .event,
-            sourceID: "gcal-\(event.id)",
-            content: content,
-            keywords: keywords,
-            quality: .fast,
-            sourceDate: eventDate
         )
     }
 
