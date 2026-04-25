@@ -589,6 +589,31 @@ final class IndexingService: ObservableObject {
         let descriptor = FetchDescriptor<MemoryChunk>()
         guard let chunks = try? modelContext.fetch(descriptor) else { return }
         await searchEngine.loadCache(chunks: chunks)
+
+        // One-shot migration: re-pack any chunks still holding legacy Float32
+        // embedding blobs into the new int8-quantized format (~4× smaller).
+        // Idempotent — guarded by a UserDefaults flag and a per-row format
+        // check, so subsequent launches return immediately.
+        await compactLegacyEmbeddingsIfNeeded(chunks: chunks)
+    }
+
+    private func compactLegacyEmbeddingsIfNeeded(chunks: [MemoryChunk]) async {
+        let migrationKey = "delta.embeddingsQuantizedV1"
+        if UserDefaults.standard.bool(forKey: migrationKey) { return }
+
+        var migrated = 0
+        for chunk in chunks {
+            guard let data = chunk.embeddingData,
+                  !EmbeddingService.isQuantized(data) else { continue }
+            let vector = EmbeddingService.unpack(data)
+            guard !vector.isEmpty else { continue }
+            chunk.embeddingData = EmbeddingService.pack(vector)
+            migrated += 1
+            // Yield occasionally so a large library doesn't block the actor.
+            if migrated % 200 == 0 { await Task.yield() }
+        }
+        if migrated > 0 { try? modelContext.save() }
+        UserDefaults.standard.set(true, forKey: migrationKey)
     }
 }
 
