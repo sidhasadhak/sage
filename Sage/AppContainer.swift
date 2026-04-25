@@ -19,6 +19,7 @@ final class AppContainer: ObservableObject {
     let modelManager: ModelManager
     let reminderService: ReminderCreationService
     let calendarEventService: CalendarEventCreationService
+    let retrievalEval: RetrievalEval
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -49,6 +50,7 @@ final class AppContainer: ObservableObject {
 
         self.reminderService      = ReminderCreationService()
         self.calendarEventService = CalendarEventCreationService()
+        self.retrievalEval        = RetrievalEval(searchEngine: search)
     }
 
     // MARK: - Bootstrap

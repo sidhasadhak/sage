@@ -23,6 +23,8 @@ struct DiagnosticsView: View {
     @State private var photoModelFiles: ModelIntegrity = .unknown
     @State private var refreshing = false
     @State private var copiedAt: Date?
+    @State private var evalReport: EvalReport?
+    @State private var evalRunning = false
 
     enum ModelIntegrity: Equatable {
         case unknown
@@ -37,6 +39,7 @@ struct DiagnosticsView: View {
             embeddingsSection
             modelsSection
             recentLogSection
+            evalSection
             actionsSection
         }
         .navigationTitle("Diagnostics")
@@ -141,6 +144,64 @@ struct DiagnosticsView: View {
         }
     }
 
+    // Retrieval regression harness. Runs the seed query pack through
+    // SemanticSearchEngine and reports pass-rate@5 / @10 / MRR. The
+    // numbers themselves matter less than the delta between two runs:
+    // a 30-point drop after a code change is the signal to look for.
+    private var evalSection: some View {
+        Section {
+            Button {
+                Task { await runEval() }
+            } label: {
+                HStack {
+                    Label(evalRunning ? "Running…" : "Run retrieval eval",
+                          systemImage: "checkmark.seal")
+                    Spacer()
+                    if evalRunning { ProgressView().scaleEffect(0.7) }
+                }
+            }
+            .disabled(evalRunning)
+
+            if let report = evalReport {
+                row("Queries", value: "\(report.totalQueries)")
+                row("Pass@5",  value: percentString(report.passRateAt5))
+                row("Pass@10", value: percentString(report.passRateAt10))
+                row("MRR",     value: String(format: "%.3f", report.meanReciprocalRank))
+
+                DisclosureGroup("Per-query results") {
+                    ForEach(report.perQuery) { result in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(result.query).font(.caption)
+                                Spacer()
+                                if let rank = result.firstHitRank {
+                                    Text("hit @\(rank)")
+                                        .font(.caption2)
+                                        .foregroundStyle(rank <= 5 ? .green : .orange)
+                                } else {
+                                    Text("miss")
+                                        .font(.caption2)
+                                        .foregroundStyle(.red)
+                                }
+                            }
+                            ForEach(Array(result.topResultsPreview.enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        } header: {
+            Text("Retrieval eval")
+        } footer: {
+            Text("Runs \(RetrievalEval.seedQueries.count) generic queries through search and reports pass-rates. Use as a regression check after retrieval changes — re-run before and after to measure impact.")
+        }
+    }
+
     private var actionsSection: some View {
         Section {
             Button {
@@ -238,6 +299,18 @@ struct DiagnosticsView: View {
         if mb >= 1 { return String(format: "%.1f MB", mb) }
         let kb = Double(bytes) / 1_000
         return String(format: "%.0f KB", kb)
+    }
+
+    // MARK: - Eval
+
+    private func runEval() async {
+        evalRunning = true
+        defer { evalRunning = false }
+        evalReport = await container.retrievalEval.run()
+    }
+
+    private func percentString(_ ratio: Double) -> String {
+        String(format: "%.0f%%", ratio * 100)
     }
 
     // MARK: - Refresh
