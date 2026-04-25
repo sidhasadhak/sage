@@ -3,6 +3,15 @@ import Foundation
 
 @Model
 final class MemoryChunk {
+    // Indexed columns — these are the fields touched on every search,
+    // every cache load, and every upsert lookup. Without indexes,
+    // SwiftData (SQLite) performs full table scans which become a
+    // visible cold-start tax once the library passes a few thousand
+    // rows. Indexes are cheap on writes (we upsert in batches) and
+    // dramatically speed up the read paths in IndexingService and
+    // SemanticSearchEngine.
+    #Index<MemoryChunk>([\.updatedAt], [\.sourceType], [\.sourceID], [\.sourceDate])
+
     var id: UUID
     var sourceType: SourceType
     var sourceID: String
