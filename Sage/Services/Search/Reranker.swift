@@ -218,7 +218,7 @@ final class CoreMLReranker: Reranker, @unchecked Sendable {
                       "input_ids":      idArray,
                       "attention_mask": maskArray
                   ]),
-                  let output = try? model.prediction(from: input),
+                  let output = try? await model.prediction(from: input),
                   let logits = output.featureValue(for: "logits")?.multiArrayValue else {
                 scored.append((chunk, 0))
                 continue
