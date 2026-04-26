@@ -22,6 +22,7 @@ final class AppContainer: ObservableObject {
     let retrievalEval: RetrievalEval
     let toolRegistry: ToolRegistry
     let agentLoop: AgentLoop
+    let sharedContentIndexer: SharedContentIndexer
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -68,7 +69,11 @@ final class AppContainer: ObservableObject {
 
         self.reminderService      = ReminderCreationService()
         self.calendarEventService = CalendarEventCreationService()
-        self.retrievalEval = RetrievalEval(searchEngine: search)
+        self.retrievalEval        = RetrievalEval(searchEngine: search)
+        self.sharedContentIndexer = SharedContentIndexer(
+            modelContext: context,
+            searchEngine: search
+        )
 
         let registry = ToolRegistry(searchEngine: search)
         self.toolRegistry = registry

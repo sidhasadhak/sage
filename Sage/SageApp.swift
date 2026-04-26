@@ -35,6 +35,7 @@ struct SageApp: App {
     }
 
     @AppStorage("app_color_scheme") private var colorSchemeRaw: String = AppColorScheme.system.rawValue
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -43,6 +44,13 @@ struct SageApp: App {
                 .modelContainer(container.modelContainer)
                 .tint(Color("AccentColor"))
                 .preferredColorScheme(AppColorScheme(rawValue: colorSchemeRaw)?.colorScheme)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            // Pick up anything the user shared via SageShare while Sage was
+            // in the background. Runs every time the app comes to the foreground.
+            if newPhase == .active {
+                Task { await container.sharedContentIndexer.indexPendingShares() }
+            }
         }
     }
 }
