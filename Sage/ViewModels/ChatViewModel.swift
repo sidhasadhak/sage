@@ -19,23 +19,35 @@ final class ChatViewModel {
     private let llmService: LLMService
     private let contextBuilder: ContextBuilder
     private let indexingService: IndexingService
+    private let agentLoop: AgentLoop?
     private var conversation: Conversation?
     private var conversationPersisted = false   // false until first message is sent
     private let modelContext: ModelContext
 
+    /// Status text shown during agent-loop planning ("Thinking…",
+    /// "Searching your photos…"). Cleared when the final answer arrives.
+    private(set) var agentStatus: String? = nil
+
     var isGenerating: Bool { llmService.isGenerating }
     var llmState: LLMService.State { llmService.state }
+
+    /// Whether agent-loop mode is active. Persisted in UserDefaults so
+    /// the user's preference survives restarts. Default is off — the
+    /// single-shot path is faster and more predictable for simple queries.
+    @AppStorage("agent_loop_enabled") var agentLoopEnabled: Bool = false
 
     init(
         llmService: LLMService,
         contextBuilder: ContextBuilder,
         indexingService: IndexingService,
-        modelContext: ModelContext
+        modelContext: ModelContext,
+        agentLoop: AgentLoop? = nil
     ) {
         self.llmService = llmService
         self.contextBuilder = contextBuilder
         self.indexingService = indexingService
         self.modelContext = modelContext
+        self.agentLoop = agentLoop
     }
 
     func loadOrCreateConversation(_ conversation: Conversation?) {
@@ -94,12 +106,37 @@ final class ChatViewModel {
                 .map { $0.sourceID }
             if !photoIDs.isEmpty { photoAssetIDs = photoIDs }
 
-            let response = try await llmService.generate(
-                systemPrompt: context.instructions,
-                messages: chatMessages
-            ) { [weak self] chunk in
-                Task { @MainActor [weak self] in
-                    self?.streamingText += chunk
+            let response: String
+
+            if agentLoopEnabled, let loop = agentLoop {
+                // Agent-loop path: plan → tool calls → final answer.
+                // Status updates (e.g. "Searching your photos…") land
+                // in agentStatus so the UI can show a small indicator.
+                response = try await loop.run(
+                    basePrompt: context.instructions,
+                    history: chatMessages.dropLast().map { $0 },
+                    userMessage: trimmed,
+                    onStatus: { [weak self] status in
+                        Task { @MainActor [weak self] in
+                            self?.agentStatus = status
+                        }
+                    },
+                    onFinalToken: { [weak self] chunk in
+                        Task { @MainActor [weak self] in
+                            self?.streamingText += chunk
+                        }
+                    }
+                )
+                agentStatus = nil
+            } else {
+                // Standard single-shot path — unchanged from baseline.
+                response = try await llmService.generate(
+                    systemPrompt: context.instructions,
+                    messages: chatMessages
+                ) { [weak self] chunk in
+                    Task { @MainActor [weak self] in
+                        self?.streamingText += chunk
+                    }
                 }
             }
 

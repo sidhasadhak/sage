@@ -52,7 +52,8 @@ struct ChatView: View {
                 llmService: container.llmService,
                 contextBuilder: container.contextBuilder,
                 indexingService: container.indexingService,
-                modelContext: modelContext
+                modelContext: modelContext,
+                agentLoop: container.agentLoop
             )
             vm.loadOrCreateConversation(conversation)
             viewModel = vm
@@ -77,6 +78,19 @@ struct ChatView: View {
                     }
                     ForEach(viewModel?.messages ?? [], id: \.id) { message in
                         MessageBubble(message: message).id(message.id)
+                    }
+                    // Agent-loop planning status ("Thinking…", "Searching…")
+                    if let status = viewModel?.agentStatus {
+                        HStack(spacing: 8) {
+                            ProgressView().scaleEffect(0.65)
+                            Text(status)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .id("agentStatus")
                     }
                     if viewModel?.isGenerating == true && viewModel?.streamingText.isEmpty == false {
                         StreamingBubble(text: viewModel?.streamingText ?? "").id("streaming")
