@@ -32,6 +32,11 @@ final class ChatViewModel {
     /// once the action commits.
     private var pendingAssistantMessage: Message?
 
+    /// Phase-3: the typed action behind the current preview, retained
+    /// so we can hand it to the PEV controller for verify and to
+    /// `actionRunner.rollback(...)` if the user taps Undo.
+    private var pendingAction: AnyAction?
+
     private(set) var photoAssetIDs: [String] = []
 
     private let llmService: LLMService
@@ -54,6 +59,22 @@ final class ChatViewModel {
     /// Phase-2: bumps lastAccessedAt on cited chunks so the decay
     /// pass doesn't evict things the user actively engages with.
     private let memoryDecay: MemoryDecay?
+
+    /// Phase-3: closes the loop after each confirmed action — runs
+    /// verify, summarises, and surfaces Undo to the UI.
+    private let pevController: PEVController?
+
+    /// Phase-3 receipt-driven Undo affordance. Set after a verified
+    /// action commits; cleared after 8 s, after the user taps Undo,
+    /// or when a new turn begins. Drives the inline Undo bar in
+    /// ChatView (above the input bar).
+    private(set) var lastReceipt: PEVController.Receipt?
+
+    /// Phase-3: paired with `lastReceipt` so the runner has access to
+    /// the typed action when the user taps Undo. We keep this off the
+    /// receipt struct itself so `Receipt` stays a value type fit for
+    /// (eventual) persistence via JSON encoding.
+    private var lastReceiptAction: AnyAction?
 
     /// Status text shown during agent-loop planning ("Thinking…",
     /// "Searching your photos…"). Cleared when the final answer arrives.
@@ -81,6 +102,7 @@ final class ChatViewModel {
         actionRunner: ActionRunner,
         auditLogger: AuditLogger,
         memoryDecay: MemoryDecay? = nil,
+        pevController: PEVController? = nil,
         agentLoop: AgentLoop? = nil
     ) {
         self.llmService      = llmService
@@ -92,6 +114,7 @@ final class ChatViewModel {
         self.actionRunner    = actionRunner
         self.auditLogger     = auditLogger
         self.memoryDecay     = memoryDecay
+        self.pevController   = pevController
         self.agentLoop       = agentLoop
     }
 
@@ -129,6 +152,11 @@ final class ChatViewModel {
 
         pendingActionPreview = nil
         pendingAssistantMessage = nil
+        pendingAction = nil
+        // Phase-3: a new turn invalidates the prior Undo bar. The
+        // user can still view the audit log for older actions.
+        lastReceipt = nil
+        lastReceiptAction = nil
         photoAssetIDs = []
 
         let userMessage = Message(role: .user, content: trimmed)
@@ -166,6 +194,7 @@ final class ChatViewModel {
                 case .success(let diff):
                     pendingActionPreview = ActionPreview(diff: diff, displayName: action.displayName)
                     pendingAssistantMessage = assistantMessage
+                    pendingAction = action
                     assistantMessage.content = "Here's what I'll do — review and confirm:\n\n\(diff.summary)"
                     try? modelContext.save()
                     return
@@ -320,19 +349,36 @@ final class ChatViewModel {
     // MARK: - Action approval
 
     /// User tapped Approve in the preview sheet. Drives the runner
-    /// to commit and rewrites the placeholder assistant message into
-    /// a confirmation receipt line.
+    /// to commit, then closes the loop with the Phase-3 PEV controller
+    /// (verify + summary + Undo handle).
     func confirmPendingAction() async {
         guard pendingActionPreview != nil else { return }
         isExecutingAction = true
         defer { isExecutingAction = false }
 
+        let action = pendingAction
         let result = await actionRunner.confirm()
+
         switch result {
-        case .success(let receipt):
-            if let msg = pendingAssistantMessage {
-                msg.content = "✓ \(receipt.summary)"
+        case .success(let actionReceipt):
+            // ── Phase-3: close the loop ──────────────────────────────
+            // Run verify, generate the natural-language summary, and
+            // expose Undo to the UI for the next 8 seconds.
+            if let action, let pev = pevController {
+                let pevReceipt = await pev.close(action: action, receipt: actionReceipt)
+                if let msg = pendingAssistantMessage {
+                    msg.content = pevReceipt.summary
+                }
+                if pevReceipt.canUndo {
+                    surfaceUndo(receipt: pevReceipt, action: action)
+                }
+            } else {
+                // Fallback path when PEV isn't wired (e.g. tests).
+                if let msg = pendingAssistantMessage {
+                    msg.content = "✓ \(actionReceipt.summary)"
+                }
             }
+
         case .failure(let err):
             self.error = err.localizedDescription
             if let msg = pendingAssistantMessage {
@@ -342,6 +388,7 @@ final class ChatViewModel {
         try? modelContext.save()
         pendingActionPreview = nil
         pendingAssistantMessage = nil
+        pendingAction = nil
         actionRunner.reset()
     }
 
@@ -351,11 +398,58 @@ final class ChatViewModel {
     func cancelPendingAction() {
         actionRunner.cancel()
         pendingActionPreview = nil
+        pendingAction = nil
         if let msg = pendingAssistantMessage {
             msg.content = "(action cancelled)"
             try? modelContext.save()
         }
         pendingAssistantMessage = nil
+    }
+
+    // MARK: - Phase 3: Undo
+
+    /// User tapped Undo on the receipt bar. Rolls back via the
+    /// runner; rewrites the receipt message to reflect the undo.
+    func undoLastAction() async {
+        guard let receipt = lastReceipt, let action = lastReceiptAction else { return }
+        let outcome = await actionRunner.rollback(receipt.actionReceipt, with: action)
+        switch outcome {
+        case .success:
+            if let msg = pendingAssistantMessage ?? messages.last(where: { $0.role == .assistant }) {
+                msg.content = "↺ Undid \(receipt.actionReceipt.summary.lowercased())"
+                try? modelContext.save()
+            }
+        case .failure(let err):
+            self.error = err.localizedDescription
+        }
+        lastReceipt = nil
+        lastReceiptAction = nil
+    }
+
+    /// Hide the Undo bar without rolling back. Called by an auto-
+    /// dismiss timer and by the next turn's `send`.
+    func dismissUndo() {
+        lastReceipt = nil
+        lastReceiptAction = nil
+    }
+
+    /// Stashes the receipt + action and starts an 8 s auto-dismiss.
+    /// Cancels any prior Undo timer so back-to-back actions don't
+    /// race each other off the screen.
+    private func surfaceUndo(receipt: PEVController.Receipt, action: AnyAction) {
+        lastReceipt       = receipt
+        lastReceiptAction = action
+        let receiptID     = receipt.id
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self else { return }
+            // Only clear if it's still the same receipt — a newer
+            // action could have replaced it during the wait.
+            if self.lastReceipt?.id == receiptID {
+                self.lastReceipt = nil
+                self.lastReceiptAction = nil
+            }
+        }
     }
 
     // MARK: - Other UI helpers

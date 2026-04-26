@@ -185,4 +185,31 @@ final class EditEventAction: Action {
         _ = event
         throw ActionError.rollbackUnsupported(Self.name)
     }
+
+    func verify(_ receipt: ActionReceipt) async -> VerificationOutcome {
+        guard let id = receipt.entityID else { return .skipped }
+        guard let event = store.event(withIdentifier: id) else {
+            return VerificationOutcome(status: .notFound, detail: "Event no longer exists.")
+        }
+        // Walk the requested edits and confirm each landed.
+        var drift: [String] = []
+        if let t = parameters.newTitle, event.title != t {
+            drift.append("title")
+        }
+        if let d = parameters.newStartDate, abs(event.startDate.timeIntervalSince(d)) > 1 {
+            drift.append("start time")
+        }
+        if let m = parameters.newDurationMinutes {
+            let actual = Int(event.endDate.timeIntervalSince(event.startDate) / 60)
+            if actual != m { drift.append("duration (\(actual)m ≠ \(m)m)") }
+        }
+        if let n = parameters.newNotes, event.notes != n {
+            drift.append("notes")
+        }
+        if drift.isEmpty { return .passed }
+        return VerificationOutcome(
+            status: .mismatch,
+            detail: "Drifted on: \(drift.joined(separator: ", "))."
+        )
+    }
 }

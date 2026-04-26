@@ -46,6 +46,12 @@ final class AppContainer: ObservableObject {
     // and ChatViewModel both consume it.
     let memoryDecay: MemoryDecay
 
+    // ── v1.2 Phase-3 closed-loop controller ──────────────────────────
+    // Verifies action receipts and emits user-facing summaries with
+    // Undo affordances. Phase 3.5 will extend this with multi-step
+    // structured Plan execution.
+    let pevController: PEVController
+
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
         let context = modelContainer.mainContext
@@ -133,6 +139,9 @@ final class AppContainer: ObservableObject {
         // garbage-collection runs alongside fresh-data ingestion
         // without spinning a separate background task.
         self.indexingService.memoryDecay = decay
+
+        // ── v1.2 Phase-3 PEV controller initialisation ───────────────
+        self.pevController = PEVController(auditLogger: logger)
 
         // Tiny breadcrumb so the very first audit row shows boot order.
         // Phase 7's audit screen will render these chronologically.

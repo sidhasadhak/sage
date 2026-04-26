@@ -86,6 +86,30 @@ struct ActionReceipt: Sendable, Codable, Equatable {
     }
 }
 
+// MARK: - VerificationOutcome
+//
+// Phase 3 (Plan → Execute → Verify): after `execute()` returns a
+// receipt, the controller calls `verify(_:)` to confirm the write
+// landed correctly. Without it, the user has to trust the model's
+// claim of "I did it" with no read-back.
+
+struct VerificationOutcome: Sendable, Equatable {
+    enum Status: Sendable, Equatable {
+        case passed         // read-back matched expectations
+        case mismatch       // entity exists but doesn't match (drift)
+        case notFound       // entity gone — likely never persisted
+        case skipped        // verify is not implemented for this action
+    }
+
+    let status: Status
+    let detail: String      // human-readable; surfaced in the receipt UI
+
+    static let skipped = VerificationOutcome(status: .skipped, detail: "")
+    static let passed  = VerificationOutcome(status: .passed,  detail: "")
+
+    var isWarning: Bool { status == .mismatch || status == .notFound }
+}
+
 // MARK: - ActionError
 
 enum ActionError: LocalizedError {
@@ -146,6 +170,21 @@ protocol Action {
     /// Best-effort undo of a prior receipt. Throw
     /// `ActionError.rollbackUnsupported` if not implementable.
     func rollback(_ receipt: ActionReceipt) async throws
+
+    /// Closed-loop verification (Phase 3). Called by PEVController
+    /// immediately after `execute()` to read back the system state
+    /// and confirm the write actually landed. Returning `.skipped`
+    /// is fine — the receipt UI distinguishes "not verified" from
+    /// "verified".
+    func verify(_ receipt: ActionReceipt) async -> VerificationOutcome
+}
+
+extension Action {
+    /// Default: opt out. Concrete actions override when they have a
+    /// stable entity ID to look up.
+    func verify(_ receipt: ActionReceipt) async -> VerificationOutcome {
+        .skipped
+    }
 }
 
 // MARK: - AnyAction
@@ -162,6 +201,7 @@ struct AnyAction {
     private let _dryRun: () async throws -> ActionDiff
     private let _execute: () async throws -> ActionReceipt
     private let _rollback: (ActionReceipt) async throws -> Void
+    private let _verify: (ActionReceipt) async -> VerificationOutcome
 
     init<A: Action>(_ action: A) {
         self.name        = A.name
@@ -169,6 +209,11 @@ struct AnyAction {
         self._dryRun  = { try await action.dryRun() }
         self._execute = { try await action.execute() }
         self._rollback = { receipt in try await action.rollback(receipt) }
+        self._verify   = { receipt in await action.verify(receipt) }
+    }
+
+    func verify(_ receipt: ActionReceipt) async -> VerificationOutcome {
+        await _verify(receipt)
     }
 
     func dryRun()  async throws -> ActionDiff    { try await _dryRun() }
