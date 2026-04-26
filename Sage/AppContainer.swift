@@ -19,6 +19,7 @@ final class AppContainer: ObservableObject {
     let modelManager: ModelManager
     let reminderService: ReminderCreationService
     let calendarEventService: CalendarEventCreationService
+    let sharedContentIndexer: SharedContentIndexer
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -47,8 +48,12 @@ final class AppContainer: ObservableObject {
         let builder = ContextBuilder(searchEngine: search)
         self.contextBuilder = builder
 
-        self.reminderService      = ReminderCreationService()
-        self.calendarEventService = CalendarEventCreationService()
+        self.reminderService        = ReminderCreationService()
+        self.calendarEventService   = CalendarEventCreationService()
+        self.sharedContentIndexer   = SharedContentIndexer(
+            modelContext: context,
+            searchEngine: search
+        )
     }
 
     // MARK: - Bootstrap
