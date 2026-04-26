@@ -191,21 +191,29 @@ final class CoreMLReranker: Reranker, @unchecked Sendable {
     private static let modelName = "ms-marco-MiniLM-L6-v2"
     private static let maxSeqLen = 128
 
-    // Lazy so the model file is read only if the reranker is actually
-    // used, not at app launch. Model load is cheap (~5ms); no GPU needed.
-    private let model: MLModel? = {
-        guard let url = Bundle.main.url(
-            forResource: CoreMLReranker.modelName,
-            withExtension: "mlmodelc"
-        ) else { return nil }
-        return try? MLModel(contentsOf: url)
-    }()
+    // Model is loaded asynchronously on first rerank call.
+    // MLModel(contentsOf:) became async in newer CoreML SDK, so we use
+    // MLModel.load(contentsOf:) and cache the result. @unchecked Sendable
+    // is safe because rerank() is always called serially from ContextBuilder.
+    private nonisolated(unsafe) var cachedModel: MLModel?
+    private nonisolated(unsafe) var modelLoadAttempted = false
 
     private let fallback = BM25Reranker()
 
     func rerank(query: String, candidates: [MemoryChunk], topK: Int) async -> [MemoryChunk] {
-        guard let model else {
-            // Model not in bundle — fall back to BM25.
+        // Load once, cache for all subsequent calls.
+        if !modelLoadAttempted {
+            modelLoadAttempted = true
+            if let url = Bundle.main.url(
+                forResource: Self.modelName,
+                withExtension: "mlmodelc"
+            ) {
+                cachedModel = try? await MLModel.load(contentsOf: url)
+            }
+        }
+
+        guard let model = cachedModel else {
+            // Model not in bundle or failed to load — fall back to BM25.
             return await fallback.rerank(query: query, candidates: candidates, topK: topK)
         }
 
@@ -218,7 +226,7 @@ final class CoreMLReranker: Reranker, @unchecked Sendable {
                       "input_ids":      idArray,
                       "attention_mask": maskArray
                   ]),
-                  let output = try? await model.prediction(from: input),
+                  let output = try? await model.prediction(from: input, options: .init()),
                   let logits = output.featureValue(for: "logits")?.multiArrayValue else {
                 scored.append((chunk, 0))
                 continue

@@ -31,10 +31,14 @@ final class ChatViewModel {
     var isGenerating: Bool { llmService.isGenerating }
     var llmState: LLMService.State { llmService.state }
 
-    /// Whether agent-loop mode is active. Persisted in UserDefaults so
-    /// the user's preference survives restarts. Default is off — the
-    /// single-shot path is faster and more predictable for simple queries.
-    @AppStorage("agent_loop_enabled") var agentLoopEnabled: Bool = false
+    /// Whether agent-loop mode is active. Persisted in UserDefaults so the
+    /// user's preference survives restarts. Default off — single-shot path
+    /// is faster for simple queries.
+    /// Note: @AppStorage can't be used inside @Observable; read/write directly.
+    var agentLoopEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "agent_loop_enabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "agent_loop_enabled") }
+    }
 
     init(
         llmService: LLMService,
