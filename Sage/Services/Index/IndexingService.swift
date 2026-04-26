@@ -48,6 +48,10 @@ final class IndexingService: ObservableObject {
     private let spotlightService: SpotlightService
     private weak var llmService: LLMService?
     private weak var modelManager: ModelManager?
+    /// v1.2 Phase-2: optional decay sweeper. The indexAll pass calls
+    /// runIfDue at the end so memory garbage-collection happens
+    /// alongside fresh-data ingestion, sharing one wake-up cycle.
+    weak var memoryDecay: MemoryDecay?
 
     // Photos are indexed in small batches with explicit yields between each
     // batch so the GPU can release tile memory and the OS can reclaim cache.
@@ -133,6 +137,12 @@ final class IndexingService: ObservableObject {
         // to swap two large models while Llama is occupying GPU RAM.
         let canCaption = isBackgroundRun || (llmService?.isPhotoAnalysisModelActive == true)
         await indexPhotos(enableCaptioning: canCaption)
+
+        // v1.2 Phase-2: piggy-back the daily decay sweep on the
+        // indexing wake-up. Internally rate-limited to once per ~20h.
+        if let decay = memoryDecay, let result = await decay.runIfDue() {
+            log("Decay pass: demoted=\(result.demoted) evicted=\(result.evicted) skipped=\(result.skipped) pinned=\(result.pinnedSeen)")
+        }
     }
 
     // MARK: - Clear all memories
