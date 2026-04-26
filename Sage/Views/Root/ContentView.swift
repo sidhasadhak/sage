@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject var container: AppContainer
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("sage_user_name") private var userName: String = ""
+    @AppStorage("sage_onboarding_complete") private var onboardingComplete: Bool = false
     @State private var showNameSetup        = false
     @State private var showColdStartVoice  = false
     @State private var selectedTab          = 0
@@ -18,19 +19,33 @@ struct ContentView: View {
                 ModelSetupView()
             }
         }
+        // First-install onboarding — shown once before anything else.
+        // Covers the whole screen so the tab bar is never glimpsed first.
+        .fullScreenCover(isPresented: Binding(
+            get: { !onboardingComplete && container.modelManager.bothModelsDownloaded },
+            set: { _ in }
+        )) {
+            OnboardingView()
+                .environmentObject(container)
+        }
+        // Legacy name-setup sheet — only for users who completed onboarding
+        // before this flow existed but never set a name.
         .sheet(isPresented: $showNameSetup) {
             UserNameSetupView(userName: $userName)
         }
         // Cold-start voice memory capture — shown every fresh launch so the
         // user can log a thought before doing anything else. Only shown when
-        // setup is complete (bothModelsDownloaded) and name has been set.
-        // The sheet is non-blocking: "Skip" dismisses it immediately.
+        // setup is complete (bothModelsDownloaded), onboarding is done, and
+        // name has been set. The sheet is non-blocking: "Skip" dismisses it.
         .sheet(isPresented: $showColdStartVoice) {
             VoiceMemoryCaptureView()
                 .environmentObject(container)
         }
         .task {
             await container.bootstrap()
+            // New-install path is handled by the fullScreenCover above.
+            // Only prompt for name / cold-start voice for returning users.
+            guard onboardingComplete else { return }
             if userName.isEmpty {
                 showNameSetup = true
             } else if container.modelManager.bothModelsDownloaded {
