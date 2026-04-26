@@ -148,6 +148,10 @@ final class ChatViewModel {
             streamingText = ""
 
             pendingAction = Self.parseIntent(from: trimmed)
+            // When the intent is a structured action (reminder / calendar event)
+            // the photo context retrieved for the query is irrelevant. Clear it
+            // so random photos from the embedding search don't appear in the UI.
+            if pendingAction != nil { photoAssetIDs = [] }
 
             let turnContent = "User asked: \(trimmed)\nSage replied: \(response.prefix(300))"
             let chunk = MemoryChunk(

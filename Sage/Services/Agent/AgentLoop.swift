@@ -120,7 +120,14 @@ final class AgentLoop {
             // stray tool_call tags (model sometimes emits one then
             // continues with prose) and re-stream cleanly to the UI.
             let cleaned = stripToolCallBlocks(raw)
-            return try await restream(text: cleaned, onToken: onFinalToken)
+            // Guard against an empty clean result (model emitted only
+            // a tool_call block with no follow-up prose on the final
+            // iteration). Return a safe placeholder rather than an
+            // empty assistant bubble.
+            let finalText = cleaned.isEmpty
+                ? "I wasn't able to find a clear answer. Please try rephrasing your question."
+                : cleaned
+            return try await restream(text: finalText, onToken: onFinalToken)
         }
 
         // Should be unreachable — the loop exits via the no-tool-
@@ -148,14 +155,12 @@ final class AgentLoop {
                 return parsed
             }
         }
-        // Fallback: a bare {"name": "...", "arguments": {...}} block.
-        if let braceStart = text.firstIndex(of: "{"),
-           let braceEnd = text.lastIndex(of: "}") {
-            let candidate = String(text[braceStart...braceEnd])
-            if let parsed = decodeToolCall(candidate) {
-                return parsed
-            }
-        }
+        // NOTE: Bare-JSON fallback intentionally removed.
+        // A 3B model often produces JSON-shaped text in its answers
+        // (structured lists, code examples, etc.). Matching the first
+        // '{' to the last '}' and treating it as a tool call caused
+        // final answers to be silently swallowed and the agent to loop
+        // unnecessarily. The <tool_call> tag is the sole trigger now.
         return nil
     }
 

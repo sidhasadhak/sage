@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import UIKit
 
 struct SettingsView: View {
@@ -10,6 +11,11 @@ struct SettingsView: View {
     @State private var showIndexConfirm = false
     @State private var showClearConfirm = false
     @State private var isIndexing = false
+
+    // Live count of all MemoryChunks stored on device. Using @Query gives us
+    // the real persistent total, unlike indexingService.indexedCount which is
+    // a run-counter that resets to 0 every time the app launches.
+    @Query private var allChunks: [MemoryChunk]
 
     private var selectedScheme: Binding<AppColorScheme> {
         Binding(
@@ -136,7 +142,7 @@ struct SettingsView: View {
                     HStack {
                         Label("Memories indexed", systemImage: "brain")
                         Spacer()
-                        Text("\(container.indexingService.indexedCount)")
+                        Text("\(allChunks.count)")
                             .foregroundStyle(.secondary)
                     }
 

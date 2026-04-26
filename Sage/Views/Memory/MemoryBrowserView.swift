@@ -484,17 +484,19 @@ struct MemoryBrowserView: View {
             selectedContactID = chunk.sourceID
 
         case .event:
-            let store = EKEventStore()
-            if let event = store.event(withIdentifier: chunk.sourceID) {
-                let ts = event.startDate.timeIntervalSinceReferenceDate
-                if let url = URL(string: "calshow:\(ts)") {
-                    UIApplication.shared.open(url)
-                }
-            } else if let url = URL(string: "calshow://") {
-                UIApplication.shared.open(url)
-            }
+            // calshow:<CFAbsoluteTime> opens Calendar at that exact date/time.
+            // We use sourceDate from the indexed chunk rather than re-fetching
+            // from EKEventStore (a fresh store is not yet authorized and always
+            // returns nil, causing us to fall through to the generic calshow://).
+            let date = chunk.sourceDate ?? Date()
+            let ts = Int(date.timeIntervalSinceReferenceDate)
+            let url = URL(string: "calshow:\(ts)") ?? URL(string: "calshow://")!
+            UIApplication.shared.open(url)
 
         case .reminder:
+            // iOS has no public URL scheme to deep-link to a specific reminder.
+            // We open Reminders to the root; the user's default list is shown.
+            // If Apple ever exposes a per-reminder scheme we can upgrade here.
             if let url = URL(string: "x-apple-reminderkit://") {
                 UIApplication.shared.open(url)
             }
