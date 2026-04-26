@@ -15,6 +15,7 @@ struct MemoryBrowserView: View {
     @State private var selectedNote: Note?
     @State private var selectedPhotoID: String?
     @State private var selectedContactID: String?
+    @State private var showCalendar = true          // calendar is the default
     @State private var sortKey: SortKey = .sourceDate
     @State private var sortAscending = false
     @State private var expandedYears: Set<String> = []
@@ -95,16 +96,37 @@ struct MemoryBrowserView: View {
     // MARK: - Computed
 
     var filteredChunks: [MemoryChunk] {
-        var chunks = allChunks
+        // After Clear-All, allChunks goes empty — short-circuit so we don't
+        // surface stale `searchResults` referencing deleted SwiftData rows.
+        guard !allChunks.isEmpty else { return [] }
+
+        // Contacts are intentionally excluded from the Memory tab — names
+        // already surface inside note/event/voice content via entity
+        // extraction, and a flat contact list adds noise.
+        let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let semanticResults = viewModel?.searchResults ?? []
+
+        // When the user is searching, prefer the semantic-search hit list
+        // (cosine + keyword + recency) over a plain text contains() filter.
+        // Falls through to the local filter only if the engine hasn't
+        // returned results yet (cold cache, or pre-async-tick).
+        var chunks: [MemoryChunk]
+        if !trimmedQuery.isEmpty, !semanticResults.isEmpty {
+            chunks = semanticResults
+        } else if !trimmedQuery.isEmpty {
+            chunks = allChunks.filter {
+                $0.content.localizedCaseInsensitiveContains(trimmedQuery) ||
+                $0.keywords.contains { $0.localizedCaseInsensitiveContains(trimmedQuery) }
+            }
+        } else {
+            chunks = allChunks
+        }
+
+        chunks = chunks.filter { $0.sourceType != .contact }
         if let type = selectedType {
             chunks = chunks.filter { $0.sourceType == type }
         }
-        if !searchText.isEmpty {
-            chunks = chunks.filter {
-                $0.content.localizedCaseInsensitiveContains(searchText) ||
-                $0.keywords.contains { $0.localizedCaseInsensitiveContains(searchText) }
-            }
-        }
+
         return chunks.sorted {
             let d0 = sortKey.date(for: $0), d1 = sortKey.date(for: $1)
             return sortAscending ? d0 < d1 : d0 > d1
@@ -209,16 +231,39 @@ struct MemoryBrowserView: View {
                 typeFilterBar
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                if filteredChunks.isEmpty { emptyState } else { chunkList }
+
+                if showCalendar {
+                    if allChunks.isEmpty {
+                        emptyState
+                    } else {
+                        CalendarMemoryView(
+                            chunks: filteredChunks,
+                            onChunkTap: { openChunk($0) }
+                        )
+                    }
+                } else {
+                    if filteredChunks.isEmpty { emptyState } else { chunkList }
+                }
             }
             .navigationTitle("Memory")
             .searchable(text: $searchText, prompt: "Search your memories")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    sortMenu
+                    HStack(spacing: 4) {
+                        if !showCalendar { sortMenu }
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { showCalendar.toggle() }
+                        } label: {
+                            Image(systemName: showCalendar ? "list.bullet" : "calendar")
+                                .imageScale(.medium)
+                        }
+                    }
                 }
             }
-            .onChange(of: searchText) { _, _ in Task { await viewModel?.search() } }
+            .onChange(of: searchText) { _, newValue in
+                viewModel?.searchQuery = newValue
+                Task { await viewModel?.search() }
+            }
             .onChange(of: allChunks.count) { _, _ in autoExpandMostRecent() }
             .onChange(of: sortKey) { _, _ in resetExpansion() }
             .onChange(of: selectedType) { _, _ in resetExpansion() }
@@ -439,17 +484,19 @@ struct MemoryBrowserView: View {
             selectedContactID = chunk.sourceID
 
         case .event:
-            let store = EKEventStore()
-            if let event = store.event(withIdentifier: chunk.sourceID) {
-                let ts = event.startDate.timeIntervalSinceReferenceDate
-                if let url = URL(string: "calshow:\(ts)") {
-                    UIApplication.shared.open(url)
-                }
-            } else if let url = URL(string: "calshow://") {
-                UIApplication.shared.open(url)
-            }
+            // calshow:<CFAbsoluteTime> opens Calendar at that exact date/time.
+            // We use sourceDate from the indexed chunk rather than re-fetching
+            // from EKEventStore (a fresh store is not yet authorized and always
+            // returns nil, causing us to fall through to the generic calshow://).
+            let date = chunk.sourceDate ?? Date()
+            let ts = Int(date.timeIntervalSinceReferenceDate)
+            let url = URL(string: "calshow:\(ts)") ?? URL(string: "calshow://")!
+            UIApplication.shared.open(url)
 
         case .reminder:
+            // iOS has no public URL scheme to deep-link to a specific reminder.
+            // We open Reminders to the root; the user's default list is shown.
+            // If Apple ever exposes a per-reminder scheme we can upgrade here.
             if let url = URL(string: "x-apple-reminderkit://") {
                 UIApplication.shared.open(url)
             }
@@ -502,8 +549,11 @@ private struct IdentifiableString: Identifiable {
 }
 
 extension MemoryChunk.SourceType: CaseIterable {
+    // Contacts are intentionally omitted — names already surface inside
+    // notes/events/voice content via entity extraction. A flat contact
+    // list inside Memory adds noise without value.
     public static var allCases: [MemoryChunk.SourceType] = [
-        .photo, .contact, .event, .reminder, .note, .conversation, .email
+        .photo, .event, .reminder, .note, .conversation, .email
     ]
 }
 

@@ -3,6 +3,9 @@ import Foundation
 
 @Model
 final class Conversation {
+    // ChatListView's @Query sorts by updatedAt descending on every render.
+    #Index<Conversation>([\.updatedAt])
+
     var id: UUID
     var title: String
     var createdAt: Date

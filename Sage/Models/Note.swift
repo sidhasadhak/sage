@@ -3,6 +3,10 @@ import Foundation
 
 @Model
 final class Note {
+    // NotesListView sorts by `updatedAt` and IndexingService.indexAllNotes
+    // filters by `updatedAt >= cutoff`. An index makes both O(log n).
+    #Index<Note>([\.updatedAt])
+
     var id: UUID
     var title: String
     var body: String

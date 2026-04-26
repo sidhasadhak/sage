@@ -13,7 +13,10 @@ struct SageApp: App {
             Note.self,
             MemoryChunk.self,
             ImportedEmail.self,
-            LocalModel.self
+            LocalModel.self,
+            // v1.2 phase-0: audit log of every model call & data access.
+            // Lives in the same store so it inherits NSFileProtection.
+            AuditEvent.self
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         let modelContainer = try! ModelContainer(for: schema, configurations: [config])
@@ -26,7 +29,8 @@ struct SageApp: App {
         ) { task in
             guard let processingTask = task as? BGProcessingTask else { return }
             let indexTask = Task {
-                await appContainer.indexingService.indexAll()
+                // Background run: device is charging + idle, safe to load SmolVLM for captions.
+                await appContainer.indexingService.indexAll(isBackgroundRun: true)
                 processingTask.setTaskCompleted(success: true)
             }
             processingTask.expirationHandler = { indexTask.cancel() }
@@ -34,6 +38,7 @@ struct SageApp: App {
     }
 
     @AppStorage("app_color_scheme") private var colorSchemeRaw: String = AppColorScheme.system.rawValue
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -42,6 +47,13 @@ struct SageApp: App {
                 .modelContainer(container.modelContainer)
                 .tint(Color("AccentColor"))
                 .preferredColorScheme(AppColorScheme(rawValue: colorSchemeRaw)?.colorScheme)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            // Pick up anything the user shared via SageShare while Sage was
+            // in the background. Runs every time the app comes to the foreground.
+            if newPhase == .active {
+                Task { await container.sharedContentIndexer.indexPendingShares() }
+            }
         }
     }
 }

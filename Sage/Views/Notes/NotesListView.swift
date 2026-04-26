@@ -23,12 +23,20 @@ struct NotesListView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if notes.isEmpty {
-                    emptyState
-                } else {
-                    notesList
+            ZStack(alignment: .bottomTrailing) {
+                Group {
+                    if notes.isEmpty {
+                        emptyState
+                    } else {
+                        notesList
+                    }
                 }
+
+                // Floating mic button — primary capture surface, easier to
+                // reach with one-handed use than a top toolbar button.
+                voiceFAB
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 20)
             }
             .navigationTitle("Notes")
             .searchable(text: $searchText, prompt: "Search notes")
@@ -38,6 +46,7 @@ struct NotesListView: View {
             }
             .sheet(isPresented: $showVoiceRecorder) {
                 VoiceNoteRecorderView(viewModel: viewModel)
+                    .environmentObject(container)
             }
             .sheet(isPresented: $showNewChecklist) {
                 ChecklistEditorView(note: nil, viewModel: viewModel)
@@ -53,27 +62,27 @@ struct NotesListView: View {
     }
 
     private var notesList: some View {
-        ScrollView {
-            LazyVStack(spacing: 8) {
-                ForEach(filteredNotes) { note in
-                    NavigationLink {
-                        NoteEditorView(note: note, viewModel: viewModel)
+        List {
+            ForEach(filteredNotes) { note in
+                NavigationLink {
+                    NoteEditorView(note: note, viewModel: viewModel)
+                        .environmentObject(container)
+                } label: {
+                    NoteCard(note: note)
+                }
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        viewModel?.deleteNote(note)
                     } label: {
-                        NoteCard(note: note)
-                    }
-                    .buttonStyle(.plain)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            viewModel?.deleteNote(note)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                        Label("Delete", systemImage: "trash")
                     }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
         }
+        .listStyle(.plain)
     }
 
     private var emptyState: some View {
@@ -97,15 +106,9 @@ struct NotesListView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        // Voice has been moved to the bottom-right FAB for one-handed reach.
+        // Checklist + new-note remain in the top toolbar.
         ToolbarItemGroup(placement: .navigationBarTrailing) {
-            Button {
-                showVoiceRecorder = true
-            } label: {
-                Image(systemName: "mic.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(Color.accentColor)
-            }
-
             Button {
                 showNewChecklist = true
             } label: {
@@ -120,6 +123,21 @@ struct NotesListView: View {
                     .fontWeight(.semibold)
             }
         }
+    }
+
+    private var voiceFAB: some View {
+        Button {
+            showVoiceRecorder = true
+        } label: {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(Color.accentColor)
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
+        }
+        .accessibilityLabel("Record voice note")
     }
 }
 

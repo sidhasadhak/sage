@@ -6,18 +6,58 @@ import Contacts
 import EventKit
 import BackgroundTasks
 
+/// Lightweight diagnostic record for the in-app Diagnostics screen.
+/// Intentionally tiny — we keep at most `IndexingService.logCapacity`
+/// entries in a ring buffer so this never grows unbounded.
+struct IndexingLogEntry: Identifiable, Equatable {
+    enum Severity { case info, warning, error }
+    let id = UUID()
+    let date: Date
+    let severity: Severity
+    let message: String
+}
+
 @MainActor
 final class IndexingService: ObservableObject {
     @Published private(set) var isIndexing = false
     @Published private(set) var indexedCount = 0
     @Published private(set) var lastIndexedAt: Date?
 
+    /// Surfaces the most recent indexing failure (nil until something fails).
+    /// Cleared on the next successful pass. Read by DiagnosticsView so users
+    /// can finally see *why* indexing stalled instead of guessing.
+    @Published private(set) var lastError: String?
+
+    /// Ring buffer of recent indexing events for the Diagnostics screen.
+    /// Writes are O(1); we trim from the head when capacity is exceeded.
+    @Published private(set) var recentLog: [IndexingLogEntry] = []
+    static let logCapacity = 100
+
+    func log(_ message: String, severity: IndexingLogEntry.Severity = .info) {
+        let entry = IndexingLogEntry(date: Date(), severity: severity, message: message)
+        recentLog.append(entry)
+        if recentLog.count > Self.logCapacity {
+            recentLog.removeFirst(recentLog.count - Self.logCapacity)
+        }
+        if severity == .error { lastError = message }
+    }
+
     private let modelContext: ModelContext
     private let embeddingService = EmbeddingService.shared
     private let searchEngine: SemanticSearchEngine
     private let spotlightService: SpotlightService
     private weak var llmService: LLMService?
-    private weak var googleCalendarService: GoogleCalendarService?
+    private weak var modelManager: ModelManager?
+    /// v1.2 Phase-2: optional decay sweeper. The indexAll pass calls
+    /// runIfDue at the end so memory garbage-collection happens
+    /// alongside fresh-data ingestion, sharing one wake-up cycle.
+    weak var memoryDecay: MemoryDecay?
+
+    // Photos are indexed in small batches with explicit yields between each
+    // batch so the GPU can release tile memory and the OS can reclaim cache.
+    // No caps — every photo in the indexing period is processed; we just
+    // pace the work so a large library doesn't trigger OOM.
+    private let photoBatchSize = 10
 
     private enum DeltaKeys {
         static let photos   = "delta.lastPhotosIndexedAt"
@@ -26,7 +66,6 @@ final class IndexingService: ObservableObject {
         static let modelID  = "delta.lastIndexedModelID"
     }
 
-    // Reads the user-configured lookback window (default 3 months).
     private var indexingPeriodMonths: Int {
         let v = UserDefaults.standard.integer(forKey: "indexing_period_months")
         return v > 0 ? v : 3
@@ -36,22 +75,36 @@ final class IndexingService: ObservableObject {
         Calendar.current.date(byAdding: .month, value: -indexingPeriodMonths, to: Date()) ?? Date()
     }
 
-    init(modelContext: ModelContext, searchEngine: SemanticSearchEngine, spotlightService: SpotlightService, llmService: LLMService? = nil, googleCalendarService: GoogleCalendarService? = nil) {
+    init(
+        modelContext: ModelContext,
+        searchEngine: SemanticSearchEngine,
+        spotlightService: SpotlightService,
+        llmService: LLMService? = nil,
+        modelManager: ModelManager? = nil
+    ) {
         self.modelContext = modelContext
         self.searchEngine = searchEngine
         self.spotlightService = spotlightService
         self.llmService = llmService
-        self.googleCalendarService = googleCalendarService
+        self.modelManager = modelManager
         lastIndexedAt = UserDefaults.standard.object(forKey: "lastIndexedAt") as? Date
     }
 
-    // Pass the currently active model's catalogID so model changes can be detected.
-    func indexAll(currentModelID: String? = nil) async {
+    // MARK: - Full index pass
+
+    /// - Parameters:
+    ///   - currentModelID: The active chat model's catalog ID (used to detect model changes).
+    ///   - isBackgroundRun: Pass `true` only from a BGProcessingTask (device charging, idle).
+    ///     When `true`, SmolVLM is loaded for photo captioning.
+    ///     When `false` (foreground tap from Settings), photo captioning is skipped to avoid
+    ///     the memory spike of swapping two large models while the app is in use.
+    func indexAll(currentModelID: String? = nil, isBackgroundRun: Bool = false) async {
         guard !isIndexing else { return }
         isIndexing = true
+        lastError = nil
+        log("Indexing started (\(isBackgroundRun ? "background" : "foreground"))")
 
-        // When the LLM model changes, photo captions become stale (vision capability may differ).
-        // Clear photo chunks and reset the delta so they're re-captioned with the new model.
+        // When the chat model changes, photo captions become stale — clear and re-caption.
         let storedModelID = UserDefaults.standard.string(forKey: DeltaKeys.modelID)
         if let currentModelID, currentModelID != storedModelID {
             await clearChunks(ofType: .photo)
@@ -70,14 +123,61 @@ final class IndexingService: ObservableObject {
                 UserDefaults.standard.set(currentModelID, forKey: DeltaKeys.modelID)
             }
             scheduleBackgroundIndex()
+            log("Indexing finished — \(indexedCount) chunks total")
         }
 
-        await indexContacts()
+        // Order matters: lightweight, no-model sources first. Photos go last
+        // so the Vision (SmolVLM) model is loaded only after every other
+        // source has been indexed and the GPU is otherwise idle.
         await indexCalendar()
-        await indexPhotos()
+        await indexAllNotes()
+        await Task.yield()
+        // Vision captioning runs in background OR when SmolVLM is already the
+        // active model (user switched manually). Avoids OOM only when we'd need
+        // to swap two large models while Llama is occupying GPU RAM.
+        let canCaption = isBackgroundRun || (llmService?.isPhotoAnalysisModelActive == true)
+        await indexPhotos(enableCaptioning: canCaption)
+
+        // v1.2 Phase-2: piggy-back the daily decay sweep on the
+        // indexing wake-up. Internally rate-limited to once per ~20h.
+        if let decay = memoryDecay, let result = await decay.runIfDue() {
+            log("Decay pass: demoted=\(result.demoted) evicted=\(result.evicted) skipped=\(result.skipped) pinned=\(result.pinnedSeen)")
+        }
     }
 
-    // Removes all cached chunks of a given type so they'll be re-indexed on the next run.
+    // MARK: - Clear all memories
+
+    /// Wipes every indexed `MemoryChunk` from SwiftData, resets all delta
+    /// trackers, clears the in-memory search cache, and removes Spotlight
+    /// entries. After this returns, the Memory tab shows the empty state.
+    func clearAllMemories() async {
+        // 1. Delete all MemoryChunk rows from SwiftData.
+        let descriptor = FetchDescriptor<MemoryChunk>()
+        if let all = try? modelContext.fetch(descriptor) {
+            for chunk in all { modelContext.delete(chunk) }
+            try? modelContext.save()
+        }
+        // 2. Detach any Note → MemoryChunk references that survived the delete.
+        let noteDescriptor = FetchDescriptor<Note>()
+        if let notes = try? modelContext.fetch(noteDescriptor) {
+            for note in notes { note.memoryChunk = nil }
+            try? modelContext.save()
+        }
+        // 3. Reset semantic search cache + Spotlight.
+        await searchEngine.invalidateCache()
+        await spotlightService.removeAll()
+        // 4. Reset delta trackers so the next indexing pass starts fresh.
+        UserDefaults.standard.removeObject(forKey: DeltaKeys.photos)
+        UserDefaults.standard.removeObject(forKey: DeltaKeys.contacts)
+        UserDefaults.standard.removeObject(forKey: DeltaKeys.calendar)
+        UserDefaults.standard.removeObject(forKey: DeltaKeys.modelID)
+        UserDefaults.standard.removeObject(forKey: "lastIndexedAt")
+        // 5. Reset on-screen counters.
+        indexedCount = 0
+        lastIndexedAt = nil
+        log("All memories cleared", severity: .warning)
+    }
+
     private func clearChunks(ofType type: MemoryChunk.SourceType) async {
         let descriptor = FetchDescriptor<MemoryChunk>()
         guard let all = try? modelContext.fetch(descriptor) else { return }
@@ -106,14 +206,11 @@ final class IndexingService: ObservableObject {
             CNContactPhoneNumbersKey as CNKeyDescriptor,
             CNContactEmailAddressesKey as CNKeyDescriptor,
             CNContactOrganizationNameKey as CNKeyDescriptor,
-            // CNContactNoteKey requires com.apple.developer.contacts.notes entitlement;
-            // including it without the entitlement throws and kills the entire batch.
             CNContactBirthdayKey as CNKeyDescriptor
         ]
         let request = CNContactFetchRequest(keysToFetch: keysToFetch)
 
         do {
-            // enumerateContacts is synchronous and must not run on the main thread.
             let contacts: [CNContact] = try await Task.detached(priority: .utility) {
                 var result: [CNContact] = []
                 try store.enumerateContacts(with: request) { contact, _ in result.append(contact) }
@@ -134,16 +231,16 @@ final class IndexingService: ObservableObject {
 
         let phones = contact.phoneNumbers.map { $0.value.stringValue }.joined(separator: ", ")
         let emails = contact.emailAddresses.map { $0.value as String }.joined(separator: ", ")
-        let org = contact.organizationName
+        let org    = contact.organizationName
 
         var contentParts = ["Contact: \(name)"]
         if !phones.isEmpty { contentParts.append("Phone: \(phones)") }
         if !emails.isEmpty { contentParts.append("Email: \(emails)") }
-        if !org.isEmpty { contentParts.append("Organization: \(org)") }
+        if !org.isEmpty    { contentParts.append("Organization: \(org)") }
 
-        let content = contentParts.joined(separator: ". ")
+        let content  = contentParts.joined(separator: ". ")
         var keywords = [name, org].filter { !$0.isEmpty }
-        keywords += emails.components(separatedBy: ", ")
+        keywords    += emails.components(separatedBy: ", ")
 
         await upsertChunk(
             sourceType: .contact,
@@ -158,33 +255,26 @@ final class IndexingService: ObservableObject {
 
     func indexCalendar() async {
         let store = EKEventStore()
-        let now = Date()
+        let now   = Date()
         let start = periodStartDate
-        let end = Calendar.current.date(byAdding: .month, value: 3, to: now)!
+        let end   = Calendar.current.date(byAdding: .month, value: 3, to: now)!
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
-        let events = store.events(matching: predicate)
+        let events    = store.events(matching: predicate)
 
         for event in events {
             await upsertEventChunk(event)
         }
 
-        // Reminders
         store.fetchReminders(matching: store.predicateForReminders(in: nil)) { reminders in
             guard let reminders = reminders else { return }
             Task { @MainActor in
-                for reminder in reminders {
-                    await self.upsertReminderChunk(reminder)
-                }
+                for reminder in reminders { await self.upsertReminderChunk(reminder) }
             }
         }
 
-        // Google Calendar
-        if let gcal = googleCalendarService {
-            let gcalEvents = await gcal.syncedEvents(from: start, to: end)
-            for gcalEvent in gcalEvents {
-                await upsertGCalEventChunk(gcalEvent)
-            }
-        }
+        // Note: Google Calendar events added to the user's iOS account
+        // surface here through EventKit automatically — no third-party
+        // OAuth client required. (See quick-win #1: removed GoogleCalendarService.)
     }
 
     private func upsertEventChunk(_ event: EKEvent) async {
@@ -194,17 +284,12 @@ final class IndexingService: ObservableObject {
 
         var parts = ["Event: \(event.title ?? "Untitled")"]
         parts.append("Date: \(formatter.string(from: event.startDate))")
-        if let location = event.location, !location.isEmpty {
-            parts.append("Location: \(location)")
-        }
-        if let notes = event.notes, !notes.isEmpty {
-            parts.append("Notes: \(notes.prefix(200))")
-        }
+        if let location = event.location, !location.isEmpty { parts.append("Location: \(location)") }
+        if let notes = event.notes, !notes.isEmpty { parts.append("Notes: \(notes.prefix(200))") }
 
-        let content = parts.joined(separator: ". ")
+        let content  = parts.joined(separator: ". ")
         let keywords = [event.title, event.location, event.calendar?.title]
-            .compactMap { $0 }
-            .filter { !$0.isEmpty }
+            .compactMap { $0 }.filter { !$0.isEmpty }
 
         await upsertChunk(
             sourceType: .event,
@@ -217,8 +302,8 @@ final class IndexingService: ObservableObject {
     }
 
     private func upsertReminderChunk(_ reminder: EKReminder) async {
-        let status = reminder.isCompleted ? "completed" : "pending"
-        var parts = ["Reminder: \(reminder.title ?? "Untitled")", "Status: \(status)"]
+        let status  = reminder.isCompleted ? "completed" : "pending"
+        var parts   = ["Reminder: \(reminder.title ?? "Untitled")", "Status: \(status)"]
         let dueDate = reminder.dueDateComponents?.date
 
         if let due = dueDate {
@@ -238,106 +323,211 @@ final class IndexingService: ObservableObject {
         )
     }
 
-    private func upsertGCalEventChunk(_ event: GCalEvent) async {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-
-        let eventDate = event.start?.resolved
-        var parts = ["Event: \(event.summary ?? "Untitled")"]
-        if let date = eventDate {
-            parts.append("Date: \(formatter.string(from: date))")
-        }
-        if let location = event.location, !location.isEmpty {
-            parts.append("Location: \(location)")
-        }
-        if let description = event.description, !description.isEmpty {
-            parts.append("Notes: \(description.prefix(200))")
-        }
-
-        let content = parts.joined(separator: ". ")
-        let keywords = [event.summary, event.location]
-            .compactMap { $0 }
-            .filter { !$0.isEmpty }
-
-        await upsertChunk(
-            sourceType: .event,
-            sourceID: "gcal-\(event.id)",
-            content: content,
-            keywords: keywords,
-            quality: .fast,
-            sourceDate: eventDate
-        )
-    }
-
     // MARK: - Photos
 
-    func indexPhotos() async {
-        let fetchOptions = PHFetchOptions()
-        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+    /// Indexes photos from the library, walking month-by-month from newest
+    /// to oldest within the configured indexing period. Each month is
+    /// processed as its own small batch; we yield between months so the GPU
+    /// can release tile memory and SwiftData can flush. Without this
+    /// per-month structure the previous flat-cap approach indexed only the
+    /// most recent photos — older months in the period never got reached.
+    ///
+    /// - Parameter enableCaptioning: When `true` (background only), loads
+    ///   SmolVLM to generate semantic captions. Kept `false` during
+    ///   foreground runs to prevent OOM from a two-model swap while Llama
+    ///   is already in GPU RAM.
+    func indexPhotos(enableCaptioning: Bool = false) async {
+        let cal       = Calendar.current
+        let now       = Date()
+        let monthSpan = indexingPeriodMonths
 
-        // Delta: only photos newer than the last run. On first run, use the period window.
-        let since = UserDefaults.standard.object(forKey: DeltaKeys.photos) as? Date ?? periodStartDate
-        fetchOptions.predicate = NSPredicate(format: "creationDate > %@", since as CVarArg)
+        // Delta: only process photos created since the last successful indexing
+        // pass. When captioning is enabled (VLM active) we must visit all months
+        // to upgrade trivially-indexed photos with real captions. For plain
+        // foreground runs (no VLM) we skip months entirely in the past — nothing
+        // new can be there and we'd just waste SwiftData fetch round-trips.
+        let lastRun = UserDefaults.standard.object(forKey: DeltaKeys.photos) as? Date
 
-        let assets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
+        // Build [start, end) ranges, newest month first.
+        var monthRanges: [(start: Date, end: Date)] = []
+        for offset in 0..<monthSpan {
+            guard let monthEnd   = cal.date(byAdding: .month, value: -offset, to: now),
+                  let monthStart = cal.date(byAdding: .month, value: -1, to: monthEnd) else { continue }
+            monthRanges.append((start: monthStart, end: monthEnd))
+        }
+
+        // ─── SmolVLM swap-in (background only) ────────────────────────────
+        // Done once up front so we don't churn the GPU between months.
+        var didSwapToPhotoModel = false
+        if enableCaptioning,
+           let llm = llmService,
+           let mgr = modelManager,
+           let photoLocalModel = mgr.photoModel,
+           !llm.isGenerating,
+           !llm.isBackgroundProcessing {
+
+            if llm.loadedModelID != ModelCatalog.photoAnalysisModel.id {
+                llm.unloadModel()
+                // Brief pause so unload's MLX cache flush completes before
+                // we start allocating fresh weights for SmolVLM.
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                await llm.loadModel(from: photoLocalModel)
+                didSwapToPhotoModel = llm.loadedModelID == ModelCatalog.photoAnalysisModel.id
+            } else {
+                didSwapToPhotoModel = true
+            }
+        }
+        // ──────────────────────────────────────────────────────────────────
+
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
 
-        // Collect first, then process sequentially — firing concurrent Tasks for every
-        // asset causes hundreds of simultaneous image loads + LLM calls, spiking to OOM.
-        var assetList: [PHAsset] = []
-        assets.enumerateObjects { asset, _, _ in assetList.append(asset) }
-        for asset in assetList {
-            await upsertPhotoChunk(asset, dateFormatter: dateFormatter)
+        // Walk every month in the period and process every photo in each
+        // month — no caps. Photos are processed in small batches with a
+        // yield + brief sleep between each batch so the GPU can release
+        // tile memory and SwiftData can flush; this keeps memory steady on
+        // libraries with thousands of photos without dropping any.
+        for range in monthRanges {
+            // Skip months entirely before the last run when VLM is not active.
+            // When captioning is on we still visit old months to upgrade any
+            // trivially-indexed photos ("Photo taken on …") with real captions.
+            if let lastRun, !enableCaptioning, range.end <= lastRun { continue }
+
+            // For months that straddle the last-run date (or any newer month),
+            // fetch only photos created after lastRun so we don't re-visit the
+            // swath of already-indexed assets. VLM passes bypass this — they
+            // need to inspect existing chunks for trivial captions.
+            let effectiveStart: Date
+            if let lastRun, !enableCaptioning {
+                effectiveStart = max(range.start, lastRun)
+            } else {
+                effectiveStart = range.start
+            }
+
+            let opts = PHFetchOptions()
+            opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+            opts.predicate = NSPredicate(
+                format: "creationDate >= %@ AND creationDate < %@",
+                effectiveStart as CVarArg, range.end as CVarArg
+            )
+            let result = PHAsset.fetchAssets(with: .image, options: opts)
+            var monthAssets: [PHAsset] = []
+            result.enumerateObjects { a, _, _ in monthAssets.append(a) }
+
+            // Process this month's photos in fixed-size batches.
+            var batchStart = 0
+            while batchStart < monthAssets.count {
+                let batchEnd = min(batchStart + photoBatchSize, monthAssets.count)
+                for i in batchStart..<batchEnd {
+                    await upsertPhotoChunk(monthAssets[i], dateFormatter: dateFormatter)
+                }
+                batchStart = batchEnd
+
+                // Pace between batches so the GPU/SwiftData can recover.
+                await Task.yield()
+                try? await Task.sleep(nanoseconds: 80_000_000)
+            }
+
+            // Slightly longer pause between months — gives the OS a wider
+            // window to reclaim memory before we start the next month.
+            try? await Task.sleep(nanoseconds: 150_000_000)
         }
+
+        // ─── Restore chat model (background only) ─────────────────────────
+        if didSwapToPhotoModel,
+           let llm = llmService,
+           let chatLocalModel = modelManager?.chatModel {
+            llm.unloadModel()
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            await llm.loadModel(from: chatLocalModel)
+        }
+        // ──────────────────────────────────────────────────────────────────
     }
 
     private func upsertPhotoChunk(_ asset: PHAsset, dateFormatter: DateFormatter) async {
         let date = asset.creationDate.map { dateFormatter.string(from: $0) } ?? "unknown date"
 
-        // Try vision captioning if a vision model is active
+        // Skip if we've already captioned this asset — the per-month walk
+        // re-visits old months on every run, so without this guard we'd
+        // re-run the VLM over the entire library each pass.
+        // Two cases let us skip:
+        //   1. The chunk already has a substantial caption (>40 chars beyond
+        //      the trivial "Photo taken on …" fallback), regardless of model.
+        //   2. The VLM isn't loaded right now — generating a fresh caption
+        //      would only produce the same trivial fallback we already have.
+        let assetID = asset.localIdentifier
+        let existingDescriptor = FetchDescriptor<MemoryChunk>(
+            predicate: #Predicate { $0.sourceID == assetID }
+        )
+        if let existing = try? modelContext.fetch(existingDescriptor).first,
+           !existing.content.isEmpty {
+            // A "real" caption is one that (a) doesn't start with the trivial
+            // fallback prefix AND (b) is long enough to be meaningful — both
+            // conditions must hold. The old `||` incorrectly classified any
+            // sufficiently long string (e.g. a date + location string) as a
+            // real VLM caption and skipped re-captioning forever.
+            let trivialPrefix = "Photo taken on"
+            let hasRealCaption = !existing.content.hasPrefix(trivialPrefix)
+                && existing.content.count > 80
+            let vlmActive = llmService?.isPhotoAnalysisModelActive == true
+            if hasRealCaption || !vlmActive { return }
+        }
+
+        // Caption via SmolVLM — only when the photo-analysis model is active.
         var caption: String? = nil
-        if let llm = llmService, llm.isVisionCapable {
+        if let llm = llmService, llm.isPhotoAnalysisModelActive {
             let options = PHImageRequestOptions()
-            options.isSynchronous = false
-            options.deliveryMode = .highQualityFormat
+            options.isSynchronous          = false
+            // .opportunistic delivers the best available local image rather
+            // than the highly-compressed .fastFormat thumbnail, giving SmolVLM
+            // enough detail to produce accurate captions.
+            options.deliveryMode           = .opportunistic
             options.isNetworkAccessAllowed = false
+
             let image = await withCheckedContinuation { continuation in
+                var resumed = false
                 PHImageManager.default().requestImage(
                     for: asset,
-                    targetSize: CGSize(width: 256, height: 256),
+                    targetSize: CGSize(width: 384, height: 384),
                     contentMode: .aspectFit,
                     options: options
-                ) { image, _ in continuation.resume(returning: image) }
+                ) { image, _ in
+                    guard !resumed else { return }
+                    resumed = true
+                    continuation.resume(returning: image)
+                }
             }
             if let image {
                 caption = try? await llm.generateCaption(for: image)
             }
         }
 
-        var parts = [caption ?? "Photo taken on \(date)"]
+        // Date is always the first element so every photo chunk is anchored to
+        // a specific point in time — critical for temporal queries like
+        // "show me photos from last Tuesday". The VLM caption (when present)
+        // follows as semantic description; without it we fall back to just the
+        // date so the chunk is still useful for retrieval.
+        var parts: [String] = ["Photo taken on \(date)"]
+        if let caption { parts.append(caption) }
 
-        if let location = asset.location {
+        if let location = asset.location,
+           let request = MKReverseGeocodingRequest(location: location) {
+            // iOS 26+ MapKit reverse-geocoding. Deployment target is 26.4
+            // so the legacy CLGeocoder fallback is unreachable and was
+            // removed (CLGeocoder + CLPlacemark.* are deprecated in 26).
             do {
-                let locationStr: String
-                if #available(iOS 26, *),
-                   let request = MKReverseGeocodingRequest(location: location) {
-                    let items = try await request.mapItems
-                    let placemark = items.first?.placemark
-                    locationStr = [placemark?.locality, placemark?.administrativeArea, placemark?.country]
-                        .compactMap { $0 }.joined(separator: ", ")
-                } else {
-                    let placemarks = try await CLGeocoder().reverseGeocodeLocation(location)
-                    let place = placemarks.first
-                    locationStr = [place?.locality, place?.administrativeArea, place?.country]
-                        .compactMap { $0 }.joined(separator: ", ")
+                let items = try await request.mapItems
+                // `MKMapItem.name` typically resolves to the city / locality
+                // for a reverse-geocoded coordinate, which is the granularity
+                // we want for memory captions. `placemark` and the CLPlacemark
+                // fields it exposes are deprecated in iOS 26.
+                if let name = items.first?.name, !name.isEmpty {
+                    parts.append("at \(name)")
                 }
-                if !locationStr.isEmpty { parts.append("at \(locationStr)") }
             } catch {}
         }
 
-        let content = parts.joined(separator: " ")
+        let content  = parts.joined(separator: " ")
         var keywords: [String] = []
         if let caption { keywords.append(caption) }
 
@@ -353,11 +543,24 @@ final class IndexingService: ObservableObject {
 
     // MARK: - Notes
 
-    // labels: pre-generated LLM labels. If nil, falls back to splitting the note title.
+    /// Re-indexes notes from SwiftData. Only notes created/updated within
+    /// the configured indexing period are indexed — older notes stay in the
+    /// app but aren't part of the active memory index, matching the user's
+    /// expectation that the period scope applies uniformly.
+    func indexAllNotes() async {
+        let cutoff = periodStartDate
+        let descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { $0.updatedAt >= cutoff }
+        )
+        guard let notes = try? modelContext.fetch(descriptor) else { return }
+        for note in notes { await indexNote(note) }
+    }
+
+    /// labels: pre-generated LLM labels. If nil, falls back to splitting the note title.
     func indexNote(_ note: Note, labels: [String]? = nil) async {
         let content = [
             note.title.isEmpty ? nil : "Note title: \(note.title)",
-            note.body.isEmpty ? nil : note.body,
+            note.body.isEmpty  ? nil : note.body,
             note.transcription.map { "Voice transcription: \($0)" }
         ].compactMap { $0 }.joined(separator: ". ")
 
@@ -374,9 +577,7 @@ final class IndexingService: ObservableObject {
             keywords: keywords,
             quality: .contextual
         )
-        if let chunk {
-            note.memoryChunk = chunk
-        }
+        if let chunk { note.memoryChunk = chunk }
     }
 
     func removeNoteChunk(_ note: Note) {
@@ -386,7 +587,24 @@ final class IndexingService: ObservableObject {
         }
     }
 
-    // MARK: - Core
+    // MARK: - Entity graph
+
+    /// Runs the LLM entity extractor over unprocessed chunks (background, idle-only).
+    func buildEntityGraph() async {
+        guard let llm = llmService else { return }
+        let descriptor = FetchDescriptor<MemoryChunk>()
+        guard let all = try? modelContext.fetch(descriptor) else { return }
+
+        // Only process chunks that haven't been entity-analysed yet.
+        let unprocessed = all.filter { $0.entities == nil }.prefix(20)
+        for chunk in unprocessed {
+            let entities = await llm.extractEntities(from: chunk.content)
+            chunk.entities = entities
+        }
+        try? modelContext.save()
+    }
+
+    // MARK: - Core upsert
 
     @discardableResult
     private func upsertChunk(
@@ -397,13 +615,12 @@ final class IndexingService: ObservableObject {
         quality: EmbeddingService.Quality,
         sourceDate: Date? = nil
     ) async -> MemoryChunk? {
-        // Check for existing
         let descriptor = FetchDescriptor<MemoryChunk>(
             predicate: #Predicate { $0.sourceID == sourceID }
         )
         let existing = try? modelContext.fetch(descriptor).first
 
-        // Content-hash skip: if the text hasn't changed, avoid re-embedding (the expensive step)
+        // Content-hash skip: avoid re-embedding if text hasn't changed.
         if let existing, existing.content == content {
             if let sourceDate, existing.sourceDate == nil {
                 existing.sourceDate = sourceDate
@@ -414,23 +631,24 @@ final class IndexingService: ObservableObject {
         }
 
         let chunk = existing ?? {
-            let c = MemoryChunk(sourceType: sourceType, sourceID: sourceID, content: content, keywords: keywords, sourceDate: sourceDate)
+            let c = MemoryChunk(
+                sourceType: sourceType, sourceID: sourceID,
+                content: content, keywords: keywords, sourceDate: sourceDate
+            )
             modelContext.insert(c)
             return c
         }()
 
-        chunk.content = content
-        chunk.keywords = keywords
-        chunk.updatedAt = Date()
+        chunk.content    = content
+        chunk.keywords   = keywords
+        chunk.updatedAt  = Date()
         if let sourceDate { chunk.sourceDate = sourceDate }
 
-        // Compute embedding
         if let vector = try? await embeddingService.embed(text: content, quality: quality) {
             chunk.embeddingData = EmbeddingService.pack(vector)
             await searchEngine.addToCache(chunk: chunk)
         }
 
-        // Spotlight
         if !chunk.isSpotlightIndexed {
             await spotlightService.index(chunk: chunk)
             chunk.isSpotlightIndexed = true
@@ -441,12 +659,37 @@ final class IndexingService: ObservableObject {
         return chunk
     }
 
-    // MARK: - Load Cache
+    // MARK: - Load cache
 
     func loadSearchCache() async {
         let descriptor = FetchDescriptor<MemoryChunk>()
         guard let chunks = try? modelContext.fetch(descriptor) else { return }
         await searchEngine.loadCache(chunks: chunks)
+
+        // One-shot migration: re-pack any chunks still holding legacy Float32
+        // embedding blobs into the new int8-quantized format (~4× smaller).
+        // Idempotent — guarded by a UserDefaults flag and a per-row format
+        // check, so subsequent launches return immediately.
+        await compactLegacyEmbeddingsIfNeeded(chunks: chunks)
+    }
+
+    private func compactLegacyEmbeddingsIfNeeded(chunks: [MemoryChunk]) async {
+        let migrationKey = "delta.embeddingsQuantizedV1"
+        if UserDefaults.standard.bool(forKey: migrationKey) { return }
+
+        var migrated = 0
+        for chunk in chunks {
+            guard let data = chunk.embeddingData,
+                  !EmbeddingService.isQuantized(data) else { continue }
+            let vector = EmbeddingService.unpack(data)
+            guard !vector.isEmpty else { continue }
+            chunk.embeddingData = EmbeddingService.pack(vector)
+            migrated += 1
+            // Yield occasionally so a large library doesn't block the actor.
+            if migrated % 200 == 0 { await Task.yield() }
+        }
+        if migrated > 0 { try? modelContext.save() }
+        UserDefaults.standard.set(true, forKey: migrationKey)
     }
 }
 

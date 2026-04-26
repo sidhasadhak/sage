@@ -5,7 +5,11 @@ import Foundation
 final class ReminderCreationService {
     private let store = EKEventStore()
 
-    func createReminder(title: String, notes: String? = nil, dueDate: Date? = nil) async throws {
+    /// Returns the persisted reminder's `calendarItemIdentifier` so
+    /// callers can verify the write landed (Phase 3 PEV controller)
+    /// and roll it back later (action layer's Undo path).
+    @discardableResult
+    func createReminder(title: String, notes: String? = nil, dueDate: Date? = nil) async throws -> String {
         let reminder = EKReminder(eventStore: store)
         reminder.title = title
         reminder.notes = notes
@@ -16,6 +20,21 @@ final class ReminderCreationService {
             reminder.addAlarm(EKAlarm(absoluteDate: due))
         }
         try store.save(reminder, commit: true)
+        return reminder.calendarItemIdentifier
+    }
+
+    /// Lookup + delete by the identifier returned from `createReminder`.
+    /// Used by CreateReminderAction.rollback().
+    func deleteReminder(identifier: String) async throws {
+        guard let item = store.calendarItem(withIdentifier: identifier),
+              let reminder = item as? EKReminder else { return }
+        try store.remove(reminder, commit: true)
+    }
+
+    /// Read-back for verification. Returns nil if the reminder no
+    /// longer exists. Caller checks the title / due date for drift.
+    func reminder(identifier: String) -> EKReminder? {
+        store.calendarItem(withIdentifier: identifier) as? EKReminder
     }
 
     // Simple NLP: detect reminder intent and extract title + optional date

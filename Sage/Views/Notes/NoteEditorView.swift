@@ -1,7 +1,11 @@
 import SwiftUI
+import SwiftData
 
 struct NoteEditorView: View {
     @Environment(\.dismiss) var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject var container: AppContainer
+
     let note: Note?
     var viewModel: NotesViewModel?
 
@@ -71,10 +75,27 @@ struct NoteEditorView: View {
     }
 
     private func save() {
-        if let note {
-            viewModel?.saveNote(note, title: title, body: bodyText)
+        if let vm = viewModel {
+            // Standard path — ViewModel handles indexing.
+            if let note {
+                vm.saveNote(note, title: title, body: bodyText)
+            } else {
+                _ = vm.createNote(title: title, body: bodyText)
+            }
         } else {
-            _ = viewModel?.createNote(title: title, body: bodyText)
+            // Fallback path when presented without a ViewModel (e.g. from voice capture flow).
+            if let note {
+                note.title     = title
+                note.body      = bodyText
+                note.updatedAt = Date()
+                try? modelContext.save()
+                Task { await container.indexingService.indexNote(note) }
+            } else {
+                let newNote = Note(title: title, body: bodyText)
+                modelContext.insert(newNote)
+                try? modelContext.save()
+                Task { await container.indexingService.indexNote(newNote) }
+            }
         }
         dismiss()
     }

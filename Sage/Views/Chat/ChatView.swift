@@ -10,7 +10,6 @@ struct ChatView: View {
     @State private var inputText = ""
     @FocusState private var isInputFocused: Bool
     @State private var scrollProxy: ScrollViewProxy?
-    @State private var actionError: String?
     @State private var showVoiceInput = false
 
     var body: some View {
@@ -32,13 +31,13 @@ struct ChatView: View {
                 }
             }
         }
-        .alert("Couldn't save", isPresented: Binding(
-            get: { actionError != nil },
-            set: { if !$0 { actionError = nil } }
+        .alert("Something went wrong", isPresented: Binding(
+            get: { viewModel?.error != nil },
+            set: { if !$0 { viewModel?.error = nil } }
         )) {
-            Button("OK", role: .cancel) { actionError = nil }
+            Button("OK", role: .cancel) { viewModel?.error = nil }
         } message: {
-            Text(actionError ?? "")
+            Text(viewModel?.error ?? "")
         }
         .sheet(isPresented: $showVoiceInput) {
             ChatVoiceInputSheet { transcription in
@@ -47,15 +46,53 @@ struct ChatView: View {
             }
             .environmentObject(container)
         }
+        // v1.2 Phase-1 action preview. Driven entirely by the VM —
+        // dismissal goes through cancelPendingAction so the runner
+        // and audit log stay in sync with the UI.
+        .sheet(item: Binding(
+            get: { viewModel?.pendingActionPreview },
+            set: { newValue in
+                // Only treat a nil-set as a user-initiated dismissal
+                // (drag-to-dismiss). Confirm/cancel buttons clear the
+                // VM state directly and we mustn't double-cancel.
+                if newValue == nil, viewModel?.pendingActionPreview != nil {
+                    viewModel?.cancelPendingAction()
+                }
+            }
+        )) { preview in
+            ActionPreviewSheet(
+                diff: preview.diff,
+                displayName: preview.displayName,
+                isExecuting: viewModel?.isExecutingAction ?? false,
+                onConfirm: { Task { await viewModel?.confirmPendingAction() } },
+                onCancel:  { viewModel?.cancelPendingAction() }
+            )
+        }
         .task {
             let vm = ChatViewModel(
                 llmService: container.llmService,
                 contextBuilder: container.contextBuilder,
                 indexingService: container.indexingService,
-                modelContext: modelContext
+                modelContext: modelContext,
+                intentRouter:   container.intentRouter,
+                actionRegistry: container.actionRegistry,
+                actionRunner:   container.actionRunner,
+                auditLogger:    container.auditLogger,
+                memoryDecay:    container.memoryDecay,
+                pevController:  container.pevController,
+                agentLoop:      container.agentLoop
             )
             vm.loadOrCreateConversation(conversation)
             viewModel = vm
+
+            // Pre-populate the input field if the voice recorder routed a
+            // transcription here as a chat query. We clear the property so
+            // navigating away & back doesn't re-fire it.
+            if let query = container.pendingVoiceChatQuery {
+                inputText = query
+                isInputFocused = true
+                container.pendingVoiceChatQuery = nil
+            }
         }
     }
 
@@ -68,6 +105,19 @@ struct ChatView: View {
                     }
                     ForEach(viewModel?.messages ?? [], id: \.id) { message in
                         MessageBubble(message: message).id(message.id)
+                    }
+                    // Agent-loop planning status ("Thinking…", "Searching…")
+                    if let status = viewModel?.agentStatus {
+                        HStack(spacing: 8) {
+                            ProgressView().scaleEffect(0.65)
+                            Text(status)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .id("agentStatus")
                     }
                     if viewModel?.isGenerating == true && viewModel?.streamingText.isEmpty == false {
                         StreamingBubble(text: viewModel?.streamingText ?? "").id("streaming")
@@ -82,10 +132,20 @@ struct ChatView: View {
         }
     }
 
+    // v1.2 Phase-1: the inline action banner is gone. Action confirmation
+    // now lives in `ActionPreviewSheet` driven by `viewModel.pendingActionPreview`,
+    // which is presented at the top level of `body` via `.sheet(item:)`.
     private var inputBar: some View {
         VStack(spacing: 0) {
-            if let action = viewModel?.pendingAction {
-                actionBanner(action)
+            // Phase-3: Undo bar surfaces after a verified action commits.
+            // Auto-hides via the VM's 8 s timer; tap Undo to roll back.
+            if let receipt = viewModel?.lastReceipt {
+                UndoBar(
+                    receipt: receipt,
+                    onUndo:    { Task { await viewModel?.undoLastAction() } },
+                    onDismiss: { viewModel?.dismissUndo() }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             ChatInputBar(
                 text: $inputText,
@@ -99,71 +159,7 @@ struct ChatView: View {
                 Task { await viewModel?.send(text) }
             }
         }
-    }
-
-    @ViewBuilder
-    private func actionBanner(_ action: ChatViewModel.ChatAction) -> some View {
-        switch action {
-        case .createReminder(let title, let dueDate):
-            HStack(spacing: 12) {
-                Image(systemName: "bell.fill").foregroundStyle(.orange)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Add to Reminders?").font(.caption).foregroundStyle(.secondary)
-                    Text(title).font(Theme.captionFont).lineLimit(1)
-                }
-                Spacer()
-                Button("Add") {
-                    Task {
-                        do {
-                            try await container.reminderService.createReminder(title: title, dueDate: dueDate)
-                            viewModel?.dismissAction()
-                        } catch {
-                            actionError = error.localizedDescription
-                        }
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .tint(.orange)
-                dismissButton
-            }
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(Color.orange.opacity(0.1))
-
-        case .scheduleCalendarEvent(let title, let startDate):
-            HStack(spacing: 12) {
-                Image(systemName: "calendar.badge.plus").foregroundStyle(.blue)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Add to Calendar?").font(.caption).foregroundStyle(.secondary)
-                    Text(title).font(Theme.captionFont).lineLimit(1)
-                }
-                Spacer()
-                Button("Add") {
-                    Task {
-                        do {
-                            try await container.calendarEventService.createEvent(title: title, startDate: startDate)
-                            viewModel?.dismissAction()
-                        } catch {
-                            actionError = error.localizedDescription
-                        }
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .tint(.blue)
-                dismissButton
-            }
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(Color.blue.opacity(0.1))
-        }
-    }
-
-    private var dismissButton: some View {
-        Button { viewModel?.dismissAction() } label: {
-            Image(systemName: "xmark").font(.caption)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
+        .animation(.spring(duration: 0.3), value: viewModel?.lastReceipt?.id)
     }
 
     private var suggestionsView: some View {
@@ -203,7 +199,10 @@ struct ChatView: View {
                 .foregroundStyle(.primary)
 
             VStack(spacing: 8) {
-                ForEach(suggestions, id: \.self) { suggestion in
+                // Defensive: if `suggestions` ever gains duplicates or becomes
+                // user-editable, id: \.self would collide. Offset is safe because
+                // this view never mutates the array.
+                ForEach(Array(suggestions.enumerated()), id: \.offset) { _, suggestion in
                     Button(suggestion) {
                         inputText = suggestion
                         isInputFocused = true
@@ -220,15 +219,15 @@ struct ChatView: View {
 
     private var noModelWarning: some View {
         VStack(spacing: 16) {
-            Image(systemName: "cpu").font(.system(size: 52)).foregroundStyle(.secondary)
-            Text("No model loaded").font(Theme.titleFont)
-            Text("Go to the Models tab to download a local AI model. Llama 3.2 3B is a great starting point.")
+            Image(systemName: "arrow.down.circle")
+                .font(.system(size: 52))
+                .foregroundStyle(.secondary)
+            Text("Setting up AI models…").font(Theme.titleFont)
+            Text("Sage is downloading its AI models in the background. This usually takes a few minutes on Wi-Fi.")
                 .font(Theme.bodyFont).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("Open Models") {
-                NotificationCenter.default.post(name: .switchToModelsTab, object: nil)
-            }
-            .buttonStyle(SageButtonStyle())
+            ProgressView(value: container.modelManager.overallProgress)
+                .padding(.horizontal, 40)
         }
     }
 

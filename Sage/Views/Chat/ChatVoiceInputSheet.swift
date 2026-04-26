@@ -119,7 +119,7 @@ struct ChatVoiceInputSheet: View {
                 Text(phase.isRecording ? recorder.durationString : "Tap to speak")
                     .font(.system(.title3, design: .rounded, weight: .semibold))
                     .contentTransition(.numericText())
-                Text(phase.isRecording ? "Tap to finish" : "Your words will fill the chat input")
+                Text(phase.isRecording ? "Tap to finish" : "Transcription will appear in the chat input")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }

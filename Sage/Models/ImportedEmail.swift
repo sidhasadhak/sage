@@ -3,6 +3,10 @@ import Foundation
 
 @Model
 final class ImportedEmail {
+    // Mail views sort by receivedAt; index makes the descending sort
+    // and date-range predicates O(log n).
+    #Index<ImportedEmail>([\.receivedAt])
+
     var id: UUID
     var subject: String
     var sender: String

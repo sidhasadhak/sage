@@ -11,8 +11,14 @@ actor SemanticSearchEngine {
         let updatedAt: Date
     }
 
+    // Flat array kept for keyword + recency re-scoring after ANN recall.
     private var cache: [CacheEntry] = []
     private var cacheLoaded = false
+
+    // HNSW (or flat-scan fallback) index for fast cosine first-stage recall.
+    // Populated in parallel with `cache` via loadCache / addToCache.
+    private let hnswIndex = HNSWVectorIndex()
+
     private let embeddingService = EmbeddingService.shared
 
     // MARK: - Search
@@ -29,7 +35,12 @@ actor SemanticSearchEngine {
             return keywordSearch(query: query, topK: topK)
         }
 
-        let scored = cache.map { entry -> (MemoryChunk, Float) in
+        // First stage: HNSW (or flat-scan) returns cosine-nearest candidates.
+        // Fetch 2× topK so the re-scoring step has enough headroom.
+        let candidates = await hnswIndex.search(query: queryVector, topK: topK * 2)
+
+        // Second stage: re-score candidates with keyword + recency signals.
+        let scored = candidates.map { entry -> (MemoryChunk, Float) in
             let cosine = cosineSimilarity(queryVector, entry.vector)
             let keyword = Float(keywordScore(query: query, chunk: entry.chunk))
             let recency = recencyScore(date: entry.updatedAt)
@@ -58,23 +69,31 @@ actor SemanticSearchEngine {
             return CacheEntry(id: chunk.id, vector: vector, chunk: chunk, updatedAt: chunk.updatedAt)
         }
         cacheLoaded = true
+
+        // Build HNSW index from the loaded entries.
+        let entries = cache
+        Task { await hnswIndex.build(from: entries) }
     }
 
     func addToCache(chunk: MemoryChunk) async {
         guard let data = chunk.embeddingData else { return }
         let vector = EmbeddingService.unpack(data)
         guard !vector.isEmpty else { return }
+        let entry = CacheEntry(id: chunk.id, vector: vector, chunk: chunk, updatedAt: chunk.updatedAt)
         cache.removeAll { $0.id == chunk.id }
-        cache.append(CacheEntry(id: chunk.id, vector: vector, chunk: chunk, updatedAt: chunk.updatedAt))
+        cache.append(entry)
+        await hnswIndex.add(entry: entry)
     }
 
     func removeFromCache(id: UUID) {
         cache.removeAll { $0.id == id }
+        Task { await hnswIndex.remove(id: id) }
     }
 
     func invalidateCache() {
         cache = []
         cacheLoaded = false
+        Task { await hnswIndex.build(from: []) }
     }
 
     // MARK: - Helpers
