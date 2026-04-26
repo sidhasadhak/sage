@@ -43,7 +43,7 @@ struct MemoryChunkRow: View {
                         if chunk.pinned {
                             Image(systemName: "pin.fill")
                                 .font(.caption2)
-                                .foregroundStyle(.accentColor)
+                                .foregroundStyle(Color.accentColor)
                         }
                         if chunk.tier == .ephemeral {
                             Text("aged")
@@ -86,7 +86,7 @@ struct MemoryChunkRow: View {
             CorrectChunkSheet(
                 originalContent: chunk.content,
                 onSave: { newText in
-                    container.memoryDecay?.correct(chunk, newContent: newText)
+                    container.memoryDecay.correct(chunk, newContent: newText)
                     showCorrect = false
                 },
                 onCancel: { showCorrect = false }

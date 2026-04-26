@@ -106,8 +106,10 @@ final class AuditLogger {
     private let metadataCap = 1024
 
     /// Default retention. Phase 7's audit screen will let users
-    /// override this in Settings.
-    static let defaultRetentionDays = 30
+    /// override this in Settings. `nonisolated` so callers from any
+    /// actor (or the default-argument resolver, which has no actor
+    /// context) can read the constant without an isolation hop.
+    nonisolated static let defaultRetentionDays = 30
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext

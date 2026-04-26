@@ -77,7 +77,9 @@ final class RetrievalEval {
     /// has *some* chance of matching at least a handful — but the
     /// real value is consistency: re-running this after a code change
     /// should produce nearly the same numbers if retrieval is intact.
-    static let seedQueries: [EvalQuery] = [
+    /// `nonisolated` so non-MainActor callers (and default-argument
+    /// resolution) can read the constant without an isolation hop.
+    nonisolated static let seedQueries: [EvalQuery] = [
         // Photos
         EvalQuery(text: "photos from the beach",
                   expectedSourceTypes: [.photo],

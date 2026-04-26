@@ -61,7 +61,9 @@ final class CreateReminderAction: Action {
         // than blowing up at execute. EKEventStore's reminders status
         // is checked separately from events.
         let status = EKEventStore.authorizationStatus(for: .reminder)
-        if status != .fullAccess && status != .authorized {
+        // iOS 17+ replaced `.authorized` with `.fullAccess` for reminders.
+        // Deployment target is 26.4 so `.fullAccess` is the only case we honour.
+        if status != .fullAccess {
             warnings.append("Reminders access required. Sage will ask the first time.")
         }
 
