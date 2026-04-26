@@ -112,7 +112,10 @@ struct CalendarMemoryView: View {
     /// horizontal distance and a horizontal-dominant motion so it doesn't
     /// fight with vertical scroll.
     private var monthSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 28)
+        // minimumDistance 35 > tab-switcher's 60? No — child gesture wins in
+        // SwiftUI regardless of distance, but 35 reduces accidental fires from
+        // small twitches while still feeling snappy for deliberate month swipes.
+        DragGesture(minimumDistance: 35)
             .onEnded { value in
                 let dx = value.translation.width
                 let dy = value.translation.height

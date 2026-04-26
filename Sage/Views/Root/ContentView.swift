@@ -80,5 +80,28 @@ struct ContentView: View {
                 .tag(3)
         }
         .tint(.accentColor)
+        // Swipe left/right to switch tabs.
+        //
+        // Gesture priority: SwiftUI gives child-view gestures precedence over
+        // parent-view gestures when both use .gesture() (not highPriorityGesture).
+        // CalendarMemoryView attaches its month-swipe only to monthGrid, so:
+        //   • Swipe on the calendar grid  → calendar changes month (child wins)
+        //   • Swipe anywhere else         → tab switches (this gesture fires)
+        //
+        // The strict dx/dy ratio (3×) and 60pt threshold prevent vertical
+        // ScrollViews from accidentally triggering a tab switch.
+        .gesture(
+            DragGesture(minimumDistance: 60)
+                .onEnded { value in
+                    let dx = value.translation.width
+                    let dy = value.translation.height
+                    guard abs(dx) > abs(dy) * 3, abs(dx) > 60 else { return }
+                    if dx < 0 {
+                        selectedTab = min(selectedTab + 1, 3)
+                    } else {
+                        selectedTab = max(selectedTab - 1, 0)
+                    }
+                }
+        )
     }
 }
