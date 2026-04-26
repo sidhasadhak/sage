@@ -49,6 +49,8 @@ struct ChatListView: View {
                         conversationList
                     }
                 }
+                .contentShape(Rectangle())
+                .onTapGesture { inputFocused = false }
 
                 // Layered bottom stack: toast → intent preview → input bar
                 VStack(spacing: 0) {
@@ -455,6 +457,7 @@ struct ChatListView: View {
                 .listRowBackground(Color.clear)
         }
         .listStyle(.plain)
+        .scrollDismissesKeyboard(.immediately)
     }
 
     private func deleteConversations(at offsets: IndexSet) {
