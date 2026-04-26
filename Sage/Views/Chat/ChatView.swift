@@ -79,6 +79,7 @@ struct ChatView: View {
                 actionRunner:   container.actionRunner,
                 auditLogger:    container.auditLogger,
                 memoryDecay:    container.memoryDecay,
+                pevController:  container.pevController,
                 agentLoop:      container.agentLoop
             )
             vm.loadOrCreateConversation(conversation)
@@ -135,17 +136,30 @@ struct ChatView: View {
     // now lives in `ActionPreviewSheet` driven by `viewModel.pendingActionPreview`,
     // which is presented at the top level of `body` via `.sheet(item:)`.
     private var inputBar: some View {
-        ChatInputBar(
-            text: $inputText,
-            isGenerating: viewModel?.isGenerating ?? false,
-            isFocused: $isInputFocused,
-            onVoiceInput: { showVoiceInput = true }
-        ) {
-            let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return }
-            inputText = ""
-            Task { await viewModel?.send(text) }
+        VStack(spacing: 0) {
+            // Phase-3: Undo bar surfaces after a verified action commits.
+            // Auto-hides via the VM's 8 s timer; tap Undo to roll back.
+            if let receipt = viewModel?.lastReceipt {
+                UndoBar(
+                    receipt: receipt,
+                    onUndo:    { Task { await viewModel?.undoLastAction() } },
+                    onDismiss: { viewModel?.dismissUndo() }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            ChatInputBar(
+                text: $inputText,
+                isGenerating: viewModel?.isGenerating ?? false,
+                isFocused: $isInputFocused,
+                onVoiceInput: { showVoiceInput = true }
+            ) {
+                let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return }
+                inputText = ""
+                Task { await viewModel?.send(text) }
+            }
         }
+        .animation(.spring(duration: 0.3), value: viewModel?.lastReceipt?.id)
     }
 
     private var suggestionsView: some View {

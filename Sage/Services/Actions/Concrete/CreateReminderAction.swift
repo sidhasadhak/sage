@@ -75,13 +75,11 @@ final class CreateReminderAction: Action {
     }
 
     func execute() async throws -> ActionReceipt {
-        // We delegate to the existing service to keep one source of
-        // truth for the EventKit calls. We don't yet capture the
-        // EKReminder.calendarItemIdentifier from the service — that's
-        // a small follow-up so rollback can target the row precisely.
-        // Until then `entityID` is nil and rollback is a no-op.
+        // Phase 3: the service now returns the calendar-item identifier
+        // so verify can read back and rollback can target the row.
+        let id: String
         do {
-            try await service.createReminder(
+            id = try await service.createReminder(
                 title:   parameters.title,
                 notes:   parameters.notes,
                 dueDate: parameters.dueDate
@@ -92,13 +90,34 @@ final class CreateReminderAction: Action {
 
         return ActionReceipt(
             actionName: Self.name,
-            entityID: nil,                    // see above
+            entityID: id.isEmpty ? nil : id,
             summary: "Created reminder \"\(parameters.title)\"",
-            rollbackSupported: false          // flip to true once entityID lands
+            rollbackSupported: !id.isEmpty
         )
     }
 
     func rollback(_ receipt: ActionReceipt) async throws {
-        throw ActionError.rollbackUnsupported(Self.name)
+        guard let id = receipt.entityID else {
+            throw ActionError.rollbackUnsupported(Self.name)
+        }
+        do {
+            try await service.deleteReminder(identifier: id)
+        } catch {
+            throw ActionError.underlying(error)
+        }
+    }
+
+    func verify(_ receipt: ActionReceipt) async -> VerificationOutcome {
+        guard let id = receipt.entityID else { return .skipped }
+        guard let reminder = service.reminder(identifier: id) else {
+            return VerificationOutcome(status: .notFound, detail: "Reminder didn't persist.")
+        }
+        if reminder.title != parameters.title {
+            return VerificationOutcome(
+                status: .mismatch,
+                detail: "Saved title \"\(reminder.title ?? "")\" differs from \"\(parameters.title)\"."
+            )
+        }
+        return .passed
     }
 }

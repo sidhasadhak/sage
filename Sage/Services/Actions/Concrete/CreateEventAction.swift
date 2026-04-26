@@ -72,8 +72,10 @@ final class CreateEventAction: Action {
     }
 
     func execute() async throws -> ActionReceipt {
+        // Phase 3: capture eventIdentifier for verify + rollback.
+        let id: String
         do {
-            try await service.createEvent(
+            id = try await service.createEvent(
                 title: parameters.title,
                 startDate: parameters.startDate,
                 notes: parameters.notes
@@ -84,13 +86,34 @@ final class CreateEventAction: Action {
 
         return ActionReceipt(
             actionName: Self.name,
-            entityID: nil,                     // CalendarEventCreationService doesn't surface the eventIdentifier yet
+            entityID: id.isEmpty ? nil : id,
             summary: "Added \"\(parameters.title)\" to Calendar",
-            rollbackSupported: false
+            rollbackSupported: !id.isEmpty
         )
     }
 
     func rollback(_ receipt: ActionReceipt) async throws {
-        throw ActionError.rollbackUnsupported(Self.name)
+        guard let id = receipt.entityID else {
+            throw ActionError.rollbackUnsupported(Self.name)
+        }
+        do {
+            try await service.deleteEvent(identifier: id)
+        } catch {
+            throw ActionError.underlying(error)
+        }
+    }
+
+    func verify(_ receipt: ActionReceipt) async -> VerificationOutcome {
+        guard let id = receipt.entityID else { return .skipped }
+        guard let event = service.event(identifier: id) else {
+            return VerificationOutcome(status: .notFound, detail: "Event didn't persist.")
+        }
+        if event.title != parameters.title {
+            return VerificationOutcome(
+                status: .mismatch,
+                detail: "Saved title \"\(event.title ?? "")\" differs from \"\(parameters.title)\"."
+            )
+        }
+        return .passed
     }
 }
