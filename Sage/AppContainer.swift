@@ -45,17 +45,23 @@ final class AppContainer: ObservableObject {
             modelManager: manager
         )
 
-        // Token counter bridges ContextBuilder to the loaded LLM
-        // tokenizer. Weak capture — ContextBuilder must not retain
-        // LLMService since AppContainer owns both. Falls back to a
-        // character-based estimate when no model is loaded yet (cold
-        // start before ChatListView triggers `loadModel`).
+        // Token counter bridges ContextBuilder to the loaded LLM tokenizer.
+        // Falls back to chars/3 estimate before any model is in memory.
         let llm = self.llmService
         let counter = TokenCounter { [weak llm] text in
             if let n = await llm?.tokenCount(text) { return n }
             return max(1, text.count / 3)
         }
-        let builder = ContextBuilder(searchEngine: search, tokenCounter: counter)
+
+        // CoreMLReranker loads ms-marco-MiniLM-L6-v2.mlmodelc at first use;
+        // falls back to BM25 when the model bundle is absent.
+        let reranker = CoreMLReranker()
+
+        let builder = ContextBuilder(
+            searchEngine: search,
+            tokenCounter: counter,
+            reranker: reranker
+        )
         self.contextBuilder = builder
 
         self.reminderService      = ReminderCreationService()

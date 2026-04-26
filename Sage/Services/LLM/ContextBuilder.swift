@@ -32,23 +32,40 @@ final class ContextBuilder {
 
     private let searchEngine: SemanticSearchEngine
     private let tokenCounter: TokenCounter
+    private let reranker: (any Reranker)?
 
-    // Token budgets, sized for the smallest supported chat model
-    // (Llama 3.2 3B, 8192-token context window). With a 1024-token
-    // generation budget reserved on top of system prompt + retrieved
-    // memory + chat history, this leaves a healthy safety margin and
-    // remains correct after a future swap to Qwen2.5-7B (32k window).
-    private let memoryTokenBudget  = 1500
-    private let historyTokenBudget = 2000
+    // Token budgets sized for Llama 3.2 3B's 8k window.
+    private let memoryTokenBudget  = 1_500
+    private let historyTokenBudget = 2_000
 
-    init(searchEngine: SemanticSearchEngine, tokenCounter: TokenCounter = .estimating) {
+    /// Wide first-stage recall so the reranker has a meaningful pool.
+    private let firstStageK  = 50
+    /// Chunks kept after reranking before the token-budget pass.
+    private let rerankerTopK = 8
+
+    init(
+        searchEngine: SemanticSearchEngine,
+        tokenCounter: TokenCounter = .estimating,
+        reranker: (any Reranker)? = nil
+    ) {
         self.searchEngine = searchEngine
         self.tokenCounter = tokenCounter
+        self.reranker     = reranker
     }
 
     func buildContext(for query: String, history: [Message]) async -> InjectedContext {
-        let topChunks = await searchEngine.search(query: query, topK: 25)
-        let fitted    = await fitToTokenBudget(topChunks)
+        // Stage 1: broad semantic recall (top-50).
+        let candidates = await searchEngine.search(query: query, topK: firstStageK)
+
+        // Stage 2: rerank for precision, then fit to token budget.
+        let reranked: [MemoryChunk]
+        if let reranker {
+            reranked = await reranker.rerank(query: query, candidates: candidates, topK: rerankerTopK)
+        } else {
+            reranked = Array(candidates.prefix(rerankerTopK))
+        }
+
+        let fitted = await fitToTokenBudget(reranked)
         let instructions = buildSystemPrompt(chunks: fitted, history: history)
         return InjectedContext(instructions: instructions, chunks: fitted)
     }
