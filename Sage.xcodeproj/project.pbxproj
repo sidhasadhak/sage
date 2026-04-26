@@ -20,7 +20,32 @@
 		AA1E81432F9841000026DE56 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = AA1E81422F9841000026DE56 /* Tokenizers */; };
 		AA1E81452F9841100026DE56 /* NaturalLanguage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA1E81442F9841100026DE56 /* NaturalLanguage.framework */; };
 		AA1E81462F9841200026DE56 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = AA1E81472F9841200026DE56 /* MLXVLM */; };
+		AAF40D332F9E126F008F07C0 /* SageShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AAF40D292F9E126F008F07C0 /* SageShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		AAF40D312F9E126F008F07C0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA1E808F2F9838B30026DE56 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AAF40D282F9E126F008F07C0;
+			remoteInfo = SageShare;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		AAF40D382F9E126F008F07C0 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				AAF40D332F9E126F008F07C0 /* SageShare.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		AA1E80972F9838B30026DE56 /* Sage.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sage.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -34,6 +59,7 @@
 		AA1E81352F98409A0026DE56 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		AA1E81372F9840A10026DE56 /* CoreLocation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreLocation.framework; path = System/Library/Frameworks/CoreLocation.framework; sourceTree = SDKROOT; };
 		AA1E81442F9841100026DE56 /* NaturalLanguage.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NaturalLanguage.framework; path = System/Library/Frameworks/NaturalLanguage.framework; sourceTree = SDKROOT; };
+		AAF40D292F9E126F008F07C0 /* SageShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SageShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -45,6 +71,13 @@
 			);
 			target = AA1E80962F9838B30026DE56 /* Sage */;
 		};
+		AAF40D372F9E126F008F07C0 /* Exceptions for "SageShare" folder in "SageShare" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = AAF40D282F9E126F008F07C0 /* SageShare */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -54,6 +87,14 @@
 				AA1E81392F9843130026DE56 /* Exceptions for "Sage" folder in "Sage" target */,
 			);
 			path = Sage;
+			sourceTree = "<group>";
+		};
+		AAF40D2A2F9E126F008F07C0 /* SageShare */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AAF40D372F9E126F008F07C0 /* Exceptions for "SageShare" folder in "SageShare" target */,
+			);
+			path = SageShare;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -79,6 +120,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AAF40D262F9E126F008F07C0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -86,6 +134,7 @@
 			isa = PBXGroup;
 			children = (
 				AA1E80992F9838B30026DE56 /* Sage */,
+				AAF40D2A2F9E126F008F07C0 /* SageShare */,
 				AA1E80982F9838B30026DE56 /* Products */,
 				AA1E81262F983F990026DE56 /* Frameworks */,
 			);
@@ -95,6 +144,7 @@
 			isa = PBXGroup;
 			children = (
 				AA1E80972F9838B30026DE56 /* Sage.app */,
+				AAF40D292F9E126F008F07C0 /* SageShare.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -126,10 +176,12 @@
 				AA1E80932F9838B30026DE56 /* Sources */,
 				AA1E80942F9838B30026DE56 /* Frameworks */,
 				AA1E80952F9838B30026DE56 /* Resources */,
+				AAF40D382F9E126F008F07C0 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				AAF40D322F9E126F008F07C0 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				AA1E80992F9838B30026DE56 /* Sage */,
@@ -144,6 +196,28 @@
 			productReference = AA1E80972F9838B30026DE56 /* Sage.app */;
 			productType = "com.apple.product-type.application";
 		};
+		AAF40D282F9E126F008F07C0 /* SageShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AAF40D342F9E126F008F07C0 /* Build configuration list for PBXNativeTarget "SageShare" */;
+			buildPhases = (
+				AAF40D252F9E126F008F07C0 /* Sources */,
+				AAF40D262F9E126F008F07C0 /* Frameworks */,
+				AAF40D272F9E126F008F07C0 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AAF40D2A2F9E126F008F07C0 /* SageShare */,
+			);
+			name = SageShare;
+			packageProductDependencies = (
+			);
+			productName = SageShare;
+			productReference = AAF40D292F9E126F008F07C0 /* SageShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -155,6 +229,9 @@
 				LastUpgradeCheck = 2640;
 				TargetAttributes = {
 					AA1E80962F9838B30026DE56 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
+					AAF40D282F9E126F008F07C0 = {
 						CreatedOnToolsVersion = 26.4.1;
 					};
 				};
@@ -178,12 +255,20 @@
 			projectRoot = "";
 			targets = (
 				AA1E80962F9838B30026DE56 /* Sage */,
+				AAF40D282F9E126F008F07C0 /* SageShare */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		AA1E80952F9838B30026DE56 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AAF40D272F9E126F008F07C0 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -200,7 +285,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AAF40D252F9E126F008F07C0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AAF40D322F9E126F008F07C0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AAF40D282F9E126F008F07C0 /* SageShare */;
+			targetProxy = AAF40D312F9E126F008F07C0 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AA1E80A02F9838B30026DE56 /* Debug */ = {
@@ -329,6 +429,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Sage/Sage.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -362,6 +463,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Sage/Sage.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -390,6 +492,66 @@
 			};
 			name = Release;
 		};
+		AAF40D352F9E126F008F07C0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = SageShare/SageShare.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2C5X3ST57D;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SageShare/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SageShare;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.amitkamlapure.sage.SageShare;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		AAF40D362F9E126F008F07C0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = SageShare/SageShare.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2C5X3ST57D;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SageShare/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SageShare;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.amitkamlapure.sage.SageShare;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -407,6 +569,15 @@
 			buildConfigurations = (
 				AA1E80A32F9838B30026DE56 /* Debug */,
 				AA1E80A42F9838B30026DE56 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AAF40D342F9E126F008F07C0 /* Build configuration list for PBXNativeTarget "SageShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AAF40D352F9E126F008F07C0 /* Debug */,
+				AAF40D362F9E126F008F07C0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
