@@ -9,16 +9,40 @@ struct InjectedContext {
 final class ContextBuilder {
 
     private let searchEngine: SemanticSearchEngine
-    // ~1500 tokens budget for retrieved context (4 chars ≈ 1 token)
-    private let maxContextChars = 6000
+    private let reranker: (any Reranker)?
 
-    init(searchEngine: SemanticSearchEngine) {
+    // Token budgets — sized for Llama 3.2 3B's 8k window.
+    // (This branch is on the baseline before medium/14's token-counter
+    //  lands; we keep the char fallback so both branches compile cleanly.)
+    private let maxContextChars = 6_000
+
+    /// Number of candidates fetched from first-stage retrieval.
+    /// Wider than the final context window so the reranker has a
+    /// meaningful pool to re-order. Cost: N cosine ops instead of 25.
+    private let firstStageK = 50
+
+    /// Maximum chunks kept after reranking. The reranker's job is to
+    /// surface the best 8; `fitToCharBudget` may still trim further.
+    private let rerankerTopK = 8
+
+    init(searchEngine: SemanticSearchEngine, reranker: (any Reranker)? = nil) {
         self.searchEngine = searchEngine
+        self.reranker = reranker
     }
 
     func buildContext(for query: String, history: [Message]) async -> InjectedContext {
-        let topChunks = await searchEngine.search(query: query, topK: 25)
-        let fitted = fitToCharBudget(topChunks)
+        // First stage: broad semantic recall.
+        let candidates = await searchEngine.search(query: query, topK: firstStageK)
+
+        // Second stage: rerank if available, otherwise take top slice.
+        let reranked: [MemoryChunk]
+        if let reranker {
+            reranked = await reranker.rerank(query: query, candidates: candidates, topK: rerankerTopK)
+        } else {
+            reranked = Array(candidates.prefix(rerankerTopK))
+        }
+
+        let fitted = fitToCharBudget(reranked)
         let instructions = buildSystemPrompt(chunks: fitted, history: history)
         return InjectedContext(instructions: instructions, chunks: fitted)
     }

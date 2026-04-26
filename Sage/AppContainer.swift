@@ -44,7 +44,11 @@ final class AppContainer: ObservableObject {
             modelManager: manager
         )
 
-        let builder = ContextBuilder(searchEngine: search)
+        // CoreMLReranker loads ms-marco-MiniLM-L6-v2.mlmodelc from the
+        // bundle at first use; silently falls back to BM25 when absent.
+        // Either way the pipeline improves over a flat top-25 slice.
+        let reranker = CoreMLReranker()
+        let builder = ContextBuilder(searchEngine: search, reranker: reranker)
         self.contextBuilder = builder
 
         self.reminderService      = ReminderCreationService()
