@@ -5,8 +5,9 @@ struct ContentView: View {
     @EnvironmentObject var container: AppContainer
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("sage_user_name") private var userName: String = ""
-    @State private var showNameSetup = false
-    @State private var selectedTab   = 0
+    @State private var showNameSetup        = false
+    @State private var showColdStartVoice  = false
+    @State private var selectedTab          = 0
     @State private var evictionTask: Task<Void, Never>?
 
     var body: some View {
@@ -20,15 +21,27 @@ struct ContentView: View {
         .sheet(isPresented: $showNameSetup) {
             UserNameSetupView(userName: $userName)
         }
+        // Cold-start voice memory capture — shown every fresh launch so the
+        // user can log a thought before doing anything else. Only shown when
+        // setup is complete (bothModelsDownloaded) and name has been set.
+        // The sheet is non-blocking: "Skip" dismisses it immediately.
+        .sheet(isPresented: $showColdStartVoice) {
+            VoiceMemoryCaptureView()
+                .environmentObject(container)
+        }
         .task {
             await container.bootstrap()
-            if userName.isEmpty { showNameSetup = true }
+            if userName.isEmpty {
+                showNameSetup = true
+            } else if container.modelManager.bothModelsDownloaded {
+                // Brief pause so the tab UI finishes rendering before the sheet
+                // appears — prevents a jarring flash on launch.
+                try? await Task.sleep(for: .milliseconds(600))
+                showColdStartVoice = true
+            }
             // Pull any pending Siri / Shortcuts / Action-Button query out of
             // UserDefaults and route it through the existing voice-chat channel.
             SageShortcutBridge.consumePending(into: container)
-            // Model loading is intentionally deferred — it happens lazily in ChatListView
-            // when the user actually navigates to Chat. Loading at launch would spike
-            // memory before the UI has settled, risking an OOM termination.
         }
         .onChange(of: container.pendingVoiceChatQuery) { _, query in
             // Voice recorder routed a transcription to chat — switch to the

@@ -7,39 +7,44 @@ struct ChatListView: View {
     @Query(sort: \Conversation.updatedAt, order: .reverse) var conversations: [Conversation]
 
     @State private var selectedConversation: Conversation?
-    @State private var showingChat = false
+    @State private var showingChat      = false
+    @State private var showVoiceInput   = false
 
     var body: some View {
         NavigationStack {
-            ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .bottom) {
                 Group {
                     if conversations.isEmpty {
-                        emptyState
+                        voiceFirstEmptyState
                     } else {
                         conversationList
                     }
                 }
 
-                // Floating new-chat button — replaces the top-right toolbar
-                // pencil so the primary action is reachable one-handed.
-                newChatFAB
-                    .padding(.trailing, 20)
-                    .padding(.bottom, 20)
+                // Bottom action bar — voice is the primary (large, centred),
+                // new-chat pencil is the secondary (smaller, trailing).
+                bottomActionBar
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 24)
             }
             .navigationTitle("Sage")
+            .navigationBarTitleDisplayMode(.large)
             .navigationDestination(isPresented: $showingChat) {
                 ChatView(conversation: selectedConversation)
                     .environmentObject(container)
             }
+            .sheet(isPresented: $showVoiceInput) {
+                ChatVoiceInputSheet { transcription in
+                    container.pendingVoiceChatQuery = transcription
+                }
+                .environmentObject(container)
+            }
             .onAppear {
-                // Lazy model load: only starts when the user is actually on the Chat tab.
-                // A short delay lets SwiftUI finish rendering before the GPU allocation spike.
+                // Lazy model load: only starts when the user is on the Chat tab.
                 Task {
                     try? await Task.sleep(for: .seconds(1))
                     await container.loadChatModelIfNeeded()
                 }
-                // If the voice recorder routed a transcription here, open a
-                // fresh chat so ChatView can read & clear the pending query.
                 if container.pendingVoiceChatQuery != nil {
                     selectedConversation = nil
                     showingChat = true
@@ -53,46 +58,97 @@ struct ChatListView: View {
         }
     }
 
-    private var newChatFAB: some View {
-        Button {
-            selectedConversation = nil
-            showingChat = true
-        } label: {
-            Image(systemName: "square.and.pencil")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 56, height: 56)
-                .background(Color.accentColor)
-                .clipShape(Circle())
-                .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
-        }
-        .accessibilityLabel("New chat")
-    }
+    // MARK: - Bottom action bar
 
-    private var emptyState: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 56))
-                .foregroundStyle(.secondary)
+    private var bottomActionBar: some View {
+        HStack(alignment: .bottom, spacing: 0) {
+            Spacer()
 
-            VStack(spacing: 8) {
-                Text("Start a conversation")
-                    .font(Theme.titleFont)
-                Text("Ask about your photos, contacts, events, or anything on your mind.")
-                    .font(Theme.bodyFont)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
+            // ── Primary: voice button ──────────────────────────────────────
+            Button {
+                showVoiceInput = true
+            } label: {
+                ZStack {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 72, height: 72)
+                        .shadow(color: Color.accentColor.opacity(0.4), radius: 12, x: 0, y: 6)
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
             }
+            .accessibilityLabel("Start voice chat")
 
-            Button("New Chat") {
+            Spacer()
+
+            // ── Secondary: new text chat ────────────────────────────────────
+            Button {
                 selectedConversation = nil
                 showingChat = true
+            } label: {
+                ZStack {
+                    Circle()
+                        .fill(Color(.secondarySystemBackground))
+                        .frame(width: 50, height: 50)
+                        .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 3)
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
             }
-            .buttonStyle(SageButtonStyle())
+            .accessibilityLabel("New text chat")
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    // MARK: - Empty state (voice-first)
+
+    private var voiceFirstEmptyState: some View {
+        VStack(spacing: 0) {
+            Spacer()
+
+            VStack(spacing: 28) {
+                // Mic graphic with outer ring
+                ZStack {
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.08))
+                        .frame(width: 130, height: 130)
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.15))
+                        .frame(width: 100, height: 100)
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(Color.accentColor)
+                }
+
+                VStack(spacing: 10) {
+                    Text("Talk to Sage")
+                        .font(.system(.title2, design: .rounded, weight: .bold))
+                    Text("Tap the mic below to speak.\nSage will understand and respond.")
+                        .font(Theme.bodyFont)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                }
+
+                // Subtle text-chat affordance
+                Button {
+                    selectedConversation = nil
+                    showingChat = true
+                } label: {
+                    Label("Prefer typing?  Start a text chat", systemImage: "square.and.pencil")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+
+            // Space for the bottom action bar so it doesn't cover content
+            Spacer()
+            Color.clear.frame(height: 110)
+        }
+    }
+
+    // MARK: - Conversation list
 
     private var conversationList: some View {
         List {
@@ -109,6 +165,12 @@ struct ChatListView: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             }
             .onDelete(perform: deleteConversations)
+
+            // Bottom padding so the last row isn't hidden behind the action bar
+            Color.clear
+                .frame(height: 100)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
         }
         .listStyle(.plain)
     }
@@ -120,6 +182,8 @@ struct ChatListView: View {
         try? modelContext.save()
     }
 }
+
+// MARK: - Conversation row
 
 struct ConversationRow: View {
     let conversation: Conversation
