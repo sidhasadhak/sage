@@ -78,6 +78,7 @@ struct ChatView: View {
                 actionRegistry: container.actionRegistry,
                 actionRunner:   container.actionRunner,
                 auditLogger:    container.auditLogger,
+                memoryDecay:    container.memoryDecay,
                 agentLoop:      container.agentLoop
             )
             vm.loadOrCreateConversation(conversation)

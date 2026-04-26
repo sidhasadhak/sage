@@ -3,6 +3,11 @@ import Foundation
 struct InjectedContext {
     let instructions: String
     let chunks: [MemoryChunk]
+    /// Phase-2: parallel array to `chunks` carrying their `sourceID`s
+    /// in citation order. ChatViewModel uses this to map `[cN]`
+    /// markers back to the originating chunks for the Sources strip
+    /// under each assistant bubble.
+    let citationSourceIDs: [String]
 }
 
 /// Pluggable token counter — wired to the loaded LLM tokenizer in
@@ -66,8 +71,12 @@ final class ContextBuilder {
         }
 
         let fitted = await fitToTokenBudget(reranked)
-        let instructions = buildSystemPrompt(chunks: fitted, history: history)
-        return InjectedContext(instructions: instructions, chunks: fitted)
+        let (instructions, sourceIDs) = buildSystemPrompt(chunks: fitted, history: history)
+        return InjectedContext(
+            instructions: instructions,
+            chunks: fitted,
+            citationSourceIDs: sourceIDs
+        )
     }
 
     /// Builds (role, content) pairs for the chat API, walking history
@@ -114,7 +123,12 @@ final class ContextBuilder {
         return result
     }
 
-    private func buildSystemPrompt(chunks: [MemoryChunk], history: [Message]) -> String {
+    /// Returns the system prompt and the parallel array of citation
+    /// source IDs in the order they appear (so `[c1]` ↔ sourceIDs[0]).
+    private func buildSystemPrompt(
+        chunks: [MemoryChunk],
+        history: [Message]
+    ) -> (prompt: String, sourceIDs: [String]) {
         var parts: [String] = []
 
         let storedName = UserDefaults.standard.string(forKey: "sage_user_name") ?? ""
@@ -132,11 +146,13 @@ final class ContextBuilder {
         Be warm, concise, and specific. Reference personal context naturally when relevant.\(nameInstruction)
         """)
 
-        if !chunks.isEmpty {
-            let memText = chunks.map { "[\($0.typeLabel.uppercased())] \($0.content)" }.joined(separator: "\n")
-            parts.append("## Personal Context\n\(memText)")
+        // ── Phase-2: numbered chunks + citation discipline ─────────
+        let (numbered, sourceIDs) = CitationRenderer.numbered(chunks)
+        if !numbered.isEmpty {
+            parts.append("## Personal Context\n\(numbered)")
         }
+        parts.append(CitationRenderer.systemPromptAddendum(chunkCount: chunks.count))
 
-        return parts.joined(separator: "\n\n")
+        return (parts.joined(separator: "\n\n"), sourceIDs)
     }
 }

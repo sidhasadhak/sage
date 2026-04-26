@@ -51,6 +51,10 @@ final class ChatViewModel {
     private let actionRunner: ActionRunner
     private let auditLogger: AuditLogger
 
+    /// Phase-2: bumps lastAccessedAt on cited chunks so the decay
+    /// pass doesn't evict things the user actively engages with.
+    private let memoryDecay: MemoryDecay?
+
     /// Status text shown during agent-loop planning ("Thinking…",
     /// "Searching your photos…"). Cleared when the final answer arrives.
     private(set) var agentStatus: String? = nil
@@ -76,6 +80,7 @@ final class ChatViewModel {
         actionRegistry: ActionRegistry,
         actionRunner: ActionRunner,
         auditLogger: AuditLogger,
+        memoryDecay: MemoryDecay? = nil,
         agentLoop: AgentLoop? = nil
     ) {
         self.llmService      = llmService
@@ -86,6 +91,7 @@ final class ChatViewModel {
         self.actionRegistry  = actionRegistry
         self.actionRunner    = actionRunner
         self.auditLogger     = auditLogger
+        self.memoryDecay     = memoryDecay
         self.agentLoop       = agentLoop
     }
 
@@ -270,10 +276,24 @@ final class ChatViewModel {
 
             assistantMessage.content = response
             streamingText = ""
+
+            // ── Phase-2: extract citations from the response ────────
+            // Map [c1]..[cN] markers back to the chunk source IDs the
+            // ContextBuilder injected, then store on the message so
+            // the bubble UI can render a Sources strip.
+            let citedSourceIDs = CitationRenderer.extract(
+                from: response,
+                mapping: context.citationSourceIDs
+            )
+            assistantMessage.injectedChunkIDs = citedSourceIDs
+            // Bump access time on cited chunks — user clearly cares
+            // about these; let the decay pass leave them alone.
+            memoryDecay?.touch(chunkSourceIDs: citedSourceIDs)
+
             auditLogger.recordSuccess(
                 actor: .writer,
                 action: "generate",
-                dataAccessed: "chunks=\(context.chunks.count)"
+                dataAccessed: "chunks=\(context.chunks.count) cited=\(citedSourceIDs.count)"
             )
 
             let turnContent = "User asked: \(trimmed)\nSage replied: \(response.prefix(300))"

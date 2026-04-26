@@ -41,6 +41,11 @@ final class AppContainer: ObservableObject {
     let actionRegistry: ActionRegistry
     let actionRunner: ActionRunner
 
+    // ── v1.2 Phase-2 memory tier + decay ─────────────────────────────
+    // Owns pin/forget/correct + the daily decay sweep. Memory views
+    // and ChatViewModel both consume it.
+    let memoryDecay: MemoryDecay
+
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
         let context = modelContainer.mainContext
@@ -115,6 +120,19 @@ final class AppContainer: ObservableObject {
             calendarService: self.calendarEventService
         )
         self.actionRunner   = ActionRunner(auditLogger: logger)
+
+        // ── v1.2 Phase-2 memory decay initialisation ─────────────────
+        let decay = MemoryDecay(
+            modelContext: context,
+            searchEngine: search,
+            spotlightService: spotlight,
+            auditLogger: logger
+        )
+        self.memoryDecay = decay
+        // Wire the decay pass into the next indexAll wake-up so
+        // garbage-collection runs alongside fresh-data ingestion
+        // without spinning a separate background task.
+        self.indexingService.memoryDecay = decay
 
         // Tiny breadcrumb so the very first audit row shows boot order.
         // Phase 7's audit screen will render these chronologically.
