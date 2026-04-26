@@ -128,9 +128,11 @@ final class IndexingService: ObservableObject {
         await indexCalendar()
         await indexAllNotes()
         await Task.yield()
-        // Vision captioning (SmolVLM swap) only runs in background — avoids OOM during
-        // foreground use where both models would briefly compete for GPU RAM.
-        await indexPhotos(enableCaptioning: isBackgroundRun)
+        // Vision captioning runs in background OR when SmolVLM is already the
+        // active model (user switched manually). Avoids OOM only when we'd need
+        // to swap two large models while Llama is occupying GPU RAM.
+        let canCaption = isBackgroundRun || (llmService?.isPhotoAnalysisModelActive == true)
+        await indexPhotos(enableCaptioning: canCaption)
     }
 
     // MARK: - Clear all memories
@@ -329,6 +331,13 @@ final class IndexingService: ObservableObject {
         let now       = Date()
         let monthSpan = indexingPeriodMonths
 
+        // Delta: only process photos created since the last successful indexing
+        // pass. When captioning is enabled (VLM active) we must visit all months
+        // to upgrade trivially-indexed photos with real captions. For plain
+        // foreground runs (no VLM) we skip months entirely in the past — nothing
+        // new can be there and we'd just waste SwiftData fetch round-trips.
+        let lastRun = UserDefaults.standard.object(forKey: DeltaKeys.photos) as? Date
+
         // Build [start, end) ranges, newest month first.
         var monthRanges: [(start: Date, end: Date)] = []
         for offset in 0..<monthSpan {
@@ -369,11 +378,27 @@ final class IndexingService: ObservableObject {
         // tile memory and SwiftData can flush; this keeps memory steady on
         // libraries with thousands of photos without dropping any.
         for range in monthRanges {
+            // Skip months entirely before the last run when VLM is not active.
+            // When captioning is on we still visit old months to upgrade any
+            // trivially-indexed photos ("Photo taken on …") with real captions.
+            if let lastRun, !enableCaptioning, range.end <= lastRun { continue }
+
+            // For months that straddle the last-run date (or any newer month),
+            // fetch only photos created after lastRun so we don't re-visit the
+            // swath of already-indexed assets. VLM passes bypass this — they
+            // need to inspect existing chunks for trivial captions.
+            let effectiveStart: Date
+            if let lastRun, !enableCaptioning {
+                effectiveStart = max(range.start, lastRun)
+            } else {
+                effectiveStart = range.start
+            }
+
             let opts = PHFetchOptions()
             opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
             opts.predicate = NSPredicate(
                 format: "creationDate >= %@ AND creationDate < %@",
-                range.start as CVarArg, range.end as CVarArg
+                effectiveStart as CVarArg, range.end as CVarArg
             )
             let result = PHAsset.fetchAssets(with: .image, options: opts)
             var monthAssets: [PHAsset] = []
@@ -426,9 +451,14 @@ final class IndexingService: ObservableObject {
         )
         if let existing = try? modelContext.fetch(existingDescriptor).first,
            !existing.content.isEmpty {
+            // A "real" caption is one that (a) doesn't start with the trivial
+            // fallback prefix AND (b) is long enough to be meaningful — both
+            // conditions must hold. The old `||` incorrectly classified any
+            // sufficiently long string (e.g. a date + location string) as a
+            // real VLM caption and skipped re-captioning forever.
             let trivialPrefix = "Photo taken on"
             let hasRealCaption = !existing.content.hasPrefix(trivialPrefix)
-                || existing.content.count > 60
+                && existing.content.count > 80
             let vlmActive = llmService?.isPhotoAnalysisModelActive == true
             if hasRealCaption || !vlmActive { return }
         }
@@ -437,15 +467,18 @@ final class IndexingService: ObservableObject {
         var caption: String? = nil
         if let llm = llmService, llm.isPhotoAnalysisModelActive {
             let options = PHImageRequestOptions()
-            options.isSynchronous      = false
-            options.deliveryMode       = .fastFormat   // smaller thumbnail → faster, lower RAM
+            options.isSynchronous          = false
+            // .opportunistic delivers the best available local image rather
+            // than the highly-compressed .fastFormat thumbnail, giving SmolVLM
+            // enough detail to produce accurate captions.
+            options.deliveryMode           = .opportunistic
             options.isNetworkAccessAllowed = false
 
             let image = await withCheckedContinuation { continuation in
                 var resumed = false
                 PHImageManager.default().requestImage(
                     for: asset,
-                    targetSize: CGSize(width: 256, height: 256),
+                    targetSize: CGSize(width: 384, height: 384),
                     contentMode: .aspectFit,
                     options: options
                 ) { image, _ in
@@ -459,7 +492,13 @@ final class IndexingService: ObservableObject {
             }
         }
 
-        var parts = [caption ?? "Photo taken on \(date)"]
+        // Date is always the first element so every photo chunk is anchored to
+        // a specific point in time — critical for temporal queries like
+        // "show me photos from last Tuesday". The VLM caption (when present)
+        // follows as semantic description; without it we fall back to just the
+        // date so the chunk is still useful for retrieval.
+        var parts: [String] = ["Photo taken on \(date)"]
+        if let caption { parts.append(caption) }
 
         if let location = asset.location,
            let request = MKReverseGeocodingRequest(location: location) {

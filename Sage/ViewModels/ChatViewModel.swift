@@ -34,7 +34,7 @@ final class ChatViewModel {
     /// Whether agent-loop mode is active. Persisted in UserDefaults so the
     /// user's preference survives restarts. Default off — single-shot path
     /// is faster for simple queries.
-    /// Note: @AppStorage can't be used inside @Observable; read/write directly.
+    // Note: @AppStorage can't be used inside @Observable; read/write directly.
     var agentLoopEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "agent_loop_enabled") }
         set { UserDefaults.standard.set(newValue, forKey: "agent_loop_enabled") }

@@ -37,6 +37,19 @@ final class AgentLoop {
     /// then search for the right event"; not enough for runaway loops.
     private let maxIterations = 3
 
+    // ── Context budget constants ──────────────────────────────────────────
+    // A 3B model typically has a 4096-token KV-cache. At ~4 chars/token
+    // the usable char budget is ~16 000. We split it roughly:
+    //   • Tools spec  : ~800 chars  (compact JSON, fixed)
+    //   • Base prompt : ≤1 500 chars (retrieved context, truncated below)
+    //   • History     : last 6 turns × ~300 chars ≈ 1 800 chars
+    //   • Tool results: ≤600 chars each
+    //   • Reserve     : headroom for the model's own output tokens
+    // Exceeding this pushes the KV cache past the Metal heap → SIGABRT.
+    private let maxBasePromptChars  = 1_500
+    private let maxHistoryTurns     = 6         // pairs = 12 messages
+    private let maxToolResultChars  = 600
+
     init(llmService: LLMService, registry: ToolRegistry) {
         self.llmService = llmService
         self.registry = registry
@@ -60,13 +73,30 @@ final class AgentLoop {
         onStatus: @escaping @Sendable (String) -> Void,
         onFinalToken: @escaping @Sendable (String) -> Void
     ) async throws -> String {
-        var conversation = history
+
+        // ── History pruning ───────────────────────────────────────────────
+        // Keep only the most recent N turns so accumulated chat history
+        // doesn't push the combined prompt past the 4096-token KV limit.
+        // We drop from the front (oldest turns) while preserving order.
+        let recentHistory = history.count > maxHistoryTurns
+            ? Array(history.suffix(maxHistoryTurns))
+            : history
+
+        var conversation = recentHistory
         conversation.append((role: "user", content: userMessage))
+
+        // ── System prompt budget ──────────────────────────────────────────
+        // Truncate the retrieved-context section so the combined system
+        // prompt (tools spec + context) stays within the char budget.
+        // The tools spec is fixed at ~800 chars; we give the rest to context.
+        let truncatedBase = basePrompt.count > maxBasePromptChars
+            ? String(basePrompt.prefix(maxBasePromptChars)) + "\n…[context truncated]"
+            : basePrompt
 
         let systemPrompt = """
         \(registry.systemPromptSection())
 
-        \(basePrompt)
+        \(truncatedBase)
         """
 
         for iteration in 1...maxIterations {
@@ -92,16 +122,22 @@ final class AgentLoop {
 
             if let call = parseToolCall(in: raw), !isLast {
                 onStatus("Running \(call.name)…")
-                let resultText: String
+                let rawResult: String
                 if let tool = registry.tool(named: call.name) {
                     do {
-                        resultText = try await tool.execute(arguments: call.arguments)
+                        rawResult = try await tool.execute(arguments: call.arguments)
                     } catch {
-                        resultText = "Error executing \(call.name): \(error.localizedDescription)"
+                        rawResult = "Error executing \(call.name): \(error.localizedDescription)"
                     }
                 } else {
-                    resultText = "Error: tool '\(call.name)' not found. Available tools: \(registry.tools.map { $0.name }.joined(separator: ", "))."
+                    rawResult = "Error: tool '\(call.name)' not found."
                 }
+
+                // Cap the result injected back into context so a large
+                // semantic-search response doesn't explode the KV cache.
+                let resultText = rawResult.count > maxToolResultChars
+                    ? String(rawResult.prefix(maxToolResultChars)) + "\n…[truncated]"
+                    : rawResult
 
                 // Append the model's tool-call utterance and the
                 // result, then loop. We use 'user' role for the

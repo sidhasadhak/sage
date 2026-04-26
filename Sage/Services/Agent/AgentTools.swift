@@ -293,51 +293,31 @@ final class ToolRegistry {
         tools.first { $0.name == name }
     }
 
-    /// Renders the tool catalogue into the system prompt. The model
-    /// sees one block per tool with its name, description, and
-    /// JSON Schema for parameters. Format is the de-facto standard
-    /// across providers and works well with Llama 3.2 3B.
+    /// Renders the tool catalogue into the system prompt.
+    /// Uses compact JSON and terse descriptions to stay well inside the
+    /// model's context window — pretty-printed schemas waste ~30% tokens.
     func systemPromptSection() -> String {
-        let toolDescriptions = tools.map { tool in
+        // One line per tool: name | compact-JSON params | short description.
+        // This format is parseable by the model and saves hundreds of tokens
+        // compared to a multi-line block per tool.
+        let toolLines = tools.map { tool in
             let schema = serialise(tool.parametersSchema)
-            return """
-            ### \(tool.name)
-            \(tool.description)
-            Parameters: \(schema)
-            """
-        }.joined(separator: "\n\n")
+            return "- \(tool.name)(\(schema)): \(tool.description)"
+        }.joined(separator: "\n")
 
         return """
-        ## Available Tools
+        ## Tools
+        \(toolLines)
 
-        You have access to the following tools. Call a tool when it's the most reliable way \
-        to answer the user's question — especially anything involving their personal data, \
-        photos, calendar, or current time.
-
-        \(toolDescriptions)
-
-        ### How to call a tool
-        Emit a single JSON block wrapped in <tool_call>...</tool_call> tags, exactly like this:
-
-        <tool_call>
-        {"name": "search_memory", "arguments": {"query": "doctor appointment"}}
-        </tool_call>
-
-        Rules:
-          • One tool call per turn.
-          • After a tool runs, you'll receive its output and can either call another tool \
-        or write a final answer for the user.
-          • If no tool is needed, just write the answer directly — don't emit tool_call tags.
-          • Never invent tool names. Only the tools listed above exist.
+        To call a tool emit exactly one line: <tool_call>{"name":"X","arguments":{...}}</tool_call>
+        One call per turn. Write the answer directly if no tool is needed.
         """
     }
 
-    /// JSON-encode a parameters schema for the system prompt. The
-    /// model parses this loosely; pretty-printing helps it segment.
+    /// Compact JSON — no pretty-printing. Saves ~30% tokens vs sorted+pretty.
     private func serialise(_ schema: [String: AnySendable]) -> String {
         let wrapped = AnySendable.object(schema)
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(wrapped),
               let str = String(data: data, encoding: .utf8) else {
             return "{}"
