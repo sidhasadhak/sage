@@ -214,7 +214,9 @@ final class AppleFoundationRouter: IntentRouter, @unchecked Sendable {
 @MainActor
 final class LLMServiceRouter: IntentRouter {
 
-    let implementationName = "Llama 3.2 3B (fallback)"
+    /// `nonisolated` so callers from any actor can read it without an
+    /// `await`; `let` keeps it trivially thread-safe.
+    nonisolated let implementationName = "Llama 3.2 3B (fallback)"
 
     private let llmService: LLMService
 

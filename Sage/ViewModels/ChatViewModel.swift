@@ -8,12 +8,30 @@ final class ChatViewModel {
     private(set) var streamingText = ""
     var error: String?
 
-    enum ChatAction {
-        case createReminder(title: String, dueDate: Date?)
-        case scheduleCalendarEvent(title: String, startDate: Date?)
+    /// Surfaces the current pending action preview to the View. When
+    /// non-nil, `ChatView` presents `ActionPreviewSheet`. The `id`
+    /// makes it usable with SwiftUI's `.sheet(item:)` flow.
+    struct ActionPreview: Identifiable, Equatable {
+        let id = UUID()
+        let diff: ActionDiff
+        let displayName: String
     }
 
-    private(set) var pendingAction: ChatAction?
+    /// Phase-1 replacement for the old `pendingAction: ChatAction`
+    /// regex-driven banner. The view now shows a typed, validated
+    /// preview sheet whose only commit path goes through the runner.
+    private(set) var pendingActionPreview: ActionPreview?
+
+    /// True while `actionRunner.confirm()` is mid-flight. Drives the
+    /// preview sheet's button into a "Working…" state and prevents
+    /// double-taps.
+    private(set) var isExecutingAction: Bool = false
+
+    /// Holds the last assistant message we emitted, so we can rewrite
+    /// it from a "preview pending" placeholder to a "✓ done" line
+    /// once the action commits.
+    private var pendingAssistantMessage: Message?
+
     private(set) var photoAssetIDs: [String] = []
 
     private let llmService: LLMService
@@ -23,6 +41,15 @@ final class ChatViewModel {
     private var conversation: Conversation?
     private var conversationPersisted = false   // false until first message is sent
     private let modelContext: ModelContext
+
+    // ── Phase 1 dependencies ──────────────────────────────────────
+    // The router classifies the user input, the registry constructs
+    // a typed Action from the router's intent, and the runner
+    // orchestrates dry-run → preview → execute → audit.
+    private let intentRouter: any IntentRouter
+    private let actionRegistry: ActionRegistry
+    private let actionRunner: ActionRunner
+    private let auditLogger: AuditLogger
 
     /// Status text shown during agent-loop planning ("Thinking…",
     /// "Searching your photos…"). Cleared when the final answer arrives.
@@ -45,13 +72,21 @@ final class ChatViewModel {
         contextBuilder: ContextBuilder,
         indexingService: IndexingService,
         modelContext: ModelContext,
+        intentRouter: any IntentRouter,
+        actionRegistry: ActionRegistry,
+        actionRunner: ActionRunner,
+        auditLogger: AuditLogger,
         agentLoop: AgentLoop? = nil
     ) {
-        self.llmService = llmService
-        self.contextBuilder = contextBuilder
+        self.llmService      = llmService
+        self.contextBuilder  = contextBuilder
         self.indexingService = indexingService
-        self.modelContext = modelContext
-        self.agentLoop = agentLoop
+        self.modelContext    = modelContext
+        self.intentRouter    = intentRouter
+        self.actionRegistry  = actionRegistry
+        self.actionRunner    = actionRunner
+        self.auditLogger     = auditLogger
+        self.agentLoop       = agentLoop
     }
 
     func loadOrCreateConversation(_ conversation: Conversation?) {
@@ -86,7 +121,8 @@ final class ChatViewModel {
             conversationPersisted = true
         }
 
-        pendingAction = nil
+        pendingActionPreview = nil
+        pendingAssistantMessage = nil
         photoAssetIDs = []
 
         let userMessage = Message(role: .user, content: trimmed)
@@ -100,6 +136,97 @@ final class ChatViewModel {
         streamingText = ""
         error = nil
 
+        // ── Phase 1: route the input first ──────────────────────────────
+        // The router decides whether this is an action, retrieval, free
+        // generation, or a clarification request. Action and askUser
+        // short-circuit the chat-generation path entirely; retrieve and
+        // generate fall through to the existing flow.
+        let routerHistory = messages.dropLast().suffix(6).map {
+            ($0.role == .user ? "user: " : "assistant: ") + $0.content
+        }
+        let decision: RouterDecision = await classify(trimmed, history: Array(routerHistory))
+
+        switch decision {
+
+        case .action(let plan):
+            // Try to construct a typed action. If the registry doesn't
+            // recognise the intent or required params are missing, fall
+            // through to the chat path so the user still gets *some*
+            // answer rather than a dead-end error.
+            if actionRegistry.canHandle(plan.intent),
+               let action = try? actionRegistry.make(intent: plan.intent, parameters: plan.parameters) {
+                let outcome = await actionRunner.prepare(action)
+                switch outcome {
+                case .success(let diff):
+                    pendingActionPreview = ActionPreview(diff: diff, displayName: action.displayName)
+                    pendingAssistantMessage = assistantMessage
+                    assistantMessage.content = "Here's what I'll do — review and confirm:\n\n\(diff.summary)"
+                    try? modelContext.save()
+                    return
+                case .failure(let err):
+                    // Dry-run failed (permission, lookup, etc.). Show the
+                    // user the error and fall through to chat as a fallback.
+                    assistantMessage.content = "I couldn't prepare that action: \(err.localizedDescription)"
+                    try? modelContext.save()
+                    return
+                }
+            }
+            // Unknown intent or missing params → fall through to chat.
+            await runChatPath(
+                trimmed: trimmed,
+                conversation: conversation,
+                assistantMessage: assistantMessage
+            )
+
+        case .askUser(let question):
+            assistantMessage.content = question
+            try? modelContext.save()
+
+        case .retrieve, .generate, .unknown:
+            await runChatPath(
+                trimmed: trimmed,
+                conversation: conversation,
+                assistantMessage: assistantMessage
+            )
+        }
+    }
+
+    /// Defensive wrapper around the router so any throw surfaces as
+    /// `.unknown` and the chat path takes over. We never block the
+    /// user on a router hiccup.
+    private func classify(_ text: String, history: [String]) async -> RouterDecision {
+        do {
+            let decision = try await intentRouter.classify(text, history: history)
+            auditLogger.recordSuccess(
+                actor: .router,
+                action: "classify",
+                dataAccessed: "kind=\(label(decision))",
+                metadata: ["impl": intentRouter.implementationName]
+            )
+            return decision
+        } catch {
+            auditLogger.recordFailure(actor: .router, action: "classify", error: error)
+            return .unknown(reason: error.localizedDescription)
+        }
+    }
+
+    private func label(_ d: RouterDecision) -> String {
+        switch d {
+        case .action:   return "action"
+        case .retrieve: return "retrieve"
+        case .generate: return "generate"
+        case .askUser:  return "askUser"
+        case .unknown:  return "unknown"
+        }
+    }
+
+    /// The pre-Phase-1 chat path. Kept verbatim so existing behaviour
+    /// is preserved when the router decides this isn't an action.
+    private func runChatPath(
+        trimmed: String,
+        conversation: Conversation,
+        assistantMessage: Message
+    ) async {
         do {
             let history = messages.dropLast(2).map { $0 }
             let context = await contextBuilder.buildContext(for: trimmed, history: Array(history))
@@ -114,8 +241,6 @@ final class ChatViewModel {
 
             if agentLoopEnabled, let loop = agentLoop {
                 // Agent-loop path: plan → tool calls → final answer.
-                // Status updates (e.g. "Searching your photos…") land
-                // in agentStatus so the UI can show a small indicator.
                 response = try await loop.run(
                     basePrompt: context.instructions,
                     history: chatMessages.dropLast().map { $0 },
@@ -133,7 +258,6 @@ final class ChatViewModel {
                 )
                 agentStatus = nil
             } else {
-                // Standard single-shot path — unchanged from baseline.
                 response = try await llmService.generate(
                     systemPrompt: context.instructions,
                     messages: chatMessages
@@ -146,12 +270,11 @@ final class ChatViewModel {
 
             assistantMessage.content = response
             streamingText = ""
-
-            pendingAction = Self.parseIntent(from: trimmed)
-            // When the intent is a structured action (reminder / calendar event)
-            // the photo context retrieved for the query is irrelevant. Clear it
-            // so random photos from the embedding search don't appear in the UI.
-            if pendingAction != nil { photoAssetIDs = [] }
+            auditLogger.recordSuccess(
+                actor: .writer,
+                action: "generate",
+                dataAccessed: "chunks=\(context.chunks.count)"
+            )
 
             let turnContent = "User asked: \(trimmed)\nSage replied: \(response.prefix(300))"
             let chunk = MemoryChunk(
@@ -170,10 +293,52 @@ final class ChatViewModel {
         } catch {
             assistantMessage.content = "Something went wrong. Please try again."
             self.error = error.localizedDescription
+            auditLogger.recordFailure(actor: .writer, action: "generate", error: error)
         }
     }
 
-    func dismissAction() { pendingAction = nil }
+    // MARK: - Action approval
+
+    /// User tapped Approve in the preview sheet. Drives the runner
+    /// to commit and rewrites the placeholder assistant message into
+    /// a confirmation receipt line.
+    func confirmPendingAction() async {
+        guard pendingActionPreview != nil else { return }
+        isExecutingAction = true
+        defer { isExecutingAction = false }
+
+        let result = await actionRunner.confirm()
+        switch result {
+        case .success(let receipt):
+            if let msg = pendingAssistantMessage {
+                msg.content = "✓ \(receipt.summary)"
+            }
+        case .failure(let err):
+            self.error = err.localizedDescription
+            if let msg = pendingAssistantMessage {
+                msg.content = "✗ Couldn't complete: \(err.localizedDescription)"
+            }
+        }
+        try? modelContext.save()
+        pendingActionPreview = nil
+        pendingAssistantMessage = nil
+        actionRunner.reset()
+    }
+
+    /// User dismissed the preview without approving. Leaves the
+    /// placeholder message in place so the chat history reflects the
+    /// abandoned step.
+    func cancelPendingAction() {
+        actionRunner.cancel()
+        pendingActionPreview = nil
+        if let msg = pendingAssistantMessage {
+            msg.content = "(action cancelled)"
+            try? modelContext.save()
+        }
+        pendingAssistantMessage = nil
+    }
+
+    // MARK: - Other UI helpers
 
     func stopGeneration() { streamingText = "" }
 
@@ -181,44 +346,5 @@ final class ChatViewModel {
         modelContext.delete(message)
         messages.removeAll { $0.id == message.id }
         try? modelContext.save()
-    }
-
-    // MARK: - Intent parsing
-
-    private static func parseIntent(from text: String) -> ChatAction? {
-        let lower = text.lowercased()
-        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
-        let range = NSRange(text.startIndex..., in: text)
-        let date = detector?.matches(in: text, options: [], range: range).first?.date
-
-        let eventPatterns = [
-            "schedule a meeting", "set up a meeting", "book a meeting",
-            "create an event", "add to calendar", "schedule meeting",
-            "book appointment", "create appointment", "set a meeting",
-            "schedule an event", "plan a meeting", "arrange a meeting",
-            "set up a call", "book a call"
-        ]
-        for pattern in eventPatterns where lower.contains(pattern) {
-            let title = extractTitle(from: text, after: pattern) ?? text
-            return .scheduleCalendarEvent(title: String(title.prefix(100)), startDate: date)
-        }
-
-        let reminderPatterns = [
-            "remind me to", "remind me about", "reminder to",
-            "don't forget to", "remember to", "add reminder",
-            "set reminder", "set a reminder"
-        ]
-        for pattern in reminderPatterns where lower.contains(pattern) {
-            let title = extractTitle(from: text, after: pattern) ?? text
-            return .createReminder(title: String(title.prefix(100)), dueDate: date)
-        }
-
-        return nil
-    }
-
-    private static func extractTitle(from text: String, after pattern: String) -> String? {
-        guard let range = text.lowercased().range(of: pattern) else { return nil }
-        let after = String(text[range.upperBound...]).trimmingCharacters(in: .whitespaces)
-        return after.isEmpty ? nil : after
     }
 }

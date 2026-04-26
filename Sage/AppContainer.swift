@@ -25,17 +25,21 @@ final class AppContainer: ObservableObject {
     let sharedContentIndexer: SharedContentIndexer
 
     // ── v1.2 Phase-0 plumbing ────────────────────────────────────────
-    // None of these are wired into the chat path yet — they're
-    // available to subsequent phases. Wiring lives in:
-    //   • Phase 1 (Action layer) → consumes `intentRouter`
-    //   • Phase 7 (Privacy)      → consumes `auditLogger`
-    //   • Phase 8 (Thermal)      → consumes `resourceBudget`
-    //
-    // Resource budget is `@Published`-bearing, so it's instantiated
-    // even pre-wiring so the View layer can already bind to it.
+    // ResourceBudget is consumed from Phase 8 (thermal degradation);
+    // it's instantiated now so the View layer can already bind to its
+    // `@Published` quality state today.
     let resourceBudget: ResourceBudget
     let auditLogger: AuditLogger
     let intentRouter: any IntentRouter
+
+    // ── v1.2 Phase-1 action layer ────────────────────────────────────
+    // The registry catalogues every typed Action; the runner
+    // orchestrates dry-run → preview → execute → audit. The chat
+    // view model consumes both. Phase 6 (Shortcuts as actuator) will
+    // expand the registry; Phase 7 will use the runner from the
+    // audit-screen "Undo" path.
+    let actionRegistry: ActionRegistry
+    let actionRunner: ActionRunner
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -97,15 +101,30 @@ final class AppContainer: ObservableObject {
         // the model context; IntentRouterFactory chooses the right
         // backend based on FoundationModels availability.
         self.resourceBudget = ResourceBudget()
-        self.auditLogger    = AuditLogger(modelContext: context)
+        let logger = AuditLogger(modelContext: context)
+        self.auditLogger    = logger
         self.intentRouter   = IntentRouterFactory.make(llmService: self.llmService)
+
+        // ── v1.2 Phase-1 action layer initialisation ─────────────────
+        // ActionRegistry takes the existing reminder/calendar services
+        // and wraps them in typed Actions. ActionRunner uses the
+        // logger so every dry-run / execute / cancel hits the audit
+        // trail with no per-call boilerplate at the call sites.
+        self.actionRegistry = ActionRegistry(
+            reminderService: self.reminderService,
+            calendarService: self.calendarEventService
+        )
+        self.actionRunner   = ActionRunner(auditLogger: logger)
 
         // Tiny breadcrumb so the very first audit row shows boot order.
         // Phase 7's audit screen will render these chronologically.
-        self.auditLogger.recordSuccess(
+        logger.recordSuccess(
             actor: .privacy,
             action: "boot",
-            metadata: ["router": self.intentRouter.implementationName]
+            metadata: [
+                "router": self.intentRouter.implementationName,
+                "actions": self.actionRegistry.registeredIntents.joined(separator: ",")
+            ]
         )
     }
 
