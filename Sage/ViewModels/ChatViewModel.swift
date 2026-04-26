@@ -87,7 +87,7 @@ final class ChatViewModel {
         do {
             let history = messages.dropLast(2).map { $0 }
             let context = await contextBuilder.buildContext(for: trimmed, history: Array(history))
-            let chatMessages = contextBuilder.buildMessages(history: Array(history), newUserMessage: trimmed)
+            let chatMessages = await contextBuilder.buildMessages(history: Array(history), newUserMessage: trimmed)
 
             let photoIDs = context.chunks
                 .filter { $0.sourceType == .photo }

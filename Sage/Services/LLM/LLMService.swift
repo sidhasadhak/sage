@@ -102,6 +102,22 @@ final class LLMService {
     var topP: Float         = 0.9
     var maxNewTokens: Int   = 1024
 
+    // MARK: - Tokenization (for ContextBuilder budget math)
+
+    /// Counts tokens for `text` using the loaded model's actual
+    /// tokenizer. Returns nil if no model is loaded — callers should
+    /// fall back to a character-based estimate. We avoid throwing or
+    /// loading-on-demand here because token counting is invoked from
+    /// ContextBuilder's hot path on every chat turn; failing fast and
+    /// letting the caller estimate is preferable to forcing a model
+    /// load before the user has even hit Send.
+    func tokenCount(_ text: String) async -> Int? {
+        guard let container = modelContainer else { return nil }
+        return await container.perform { context in
+            context.tokenizer.encode(text: text, addSpecialTokens: false).count
+        }
+    }
+
     // MARK: - Model lifecycle
 
     func loadModel(from localModel: LocalModel) async {

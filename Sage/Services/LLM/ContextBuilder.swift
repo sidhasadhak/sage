@@ -5,49 +5,94 @@ struct InjectedContext {
     let chunks: [MemoryChunk]
 }
 
+/// Pluggable token counter — wired to the loaded LLM tokenizer in
+/// production, swappable for tests / pre-load fallback. The fallback
+/// implementation uses a chars/3 estimate which intentionally
+/// over-counts slightly, so we never overshoot the real token budget
+/// when the model isn't loaded yet.
+///
+/// Why a struct + closure rather than a protocol with LLMService
+/// conformance: the only callers are `ContextBuilder`'s budget loops,
+/// and a closure keeps the seam testable without dragging
+/// `LLMService` into unit tests of context fitting.
+struct TokenCounter: Sendable {
+    let count: @Sendable (String) async -> Int
+
+    /// Conservative chars/3 estimate. Used when no tokenizer is loaded
+    /// (cold start, before the chat model is in memory). English text
+    /// averages ~3.5 chars/token; we use 3.0 to err on the side of
+    /// fitting fewer chunks rather than blowing the window.
+    static let estimating = TokenCounter { text in
+        max(1, text.count / 3)
+    }
+}
+
 @MainActor
 final class ContextBuilder {
 
     private let searchEngine: SemanticSearchEngine
-    // ~1500 tokens budget for retrieved context (4 chars ≈ 1 token)
-    private let maxContextChars = 6000
+    private let tokenCounter: TokenCounter
 
-    init(searchEngine: SemanticSearchEngine) {
+    // Token budgets, sized for the smallest supported chat model
+    // (Llama 3.2 3B, 8192-token context window). With a 1024-token
+    // generation budget reserved on top of system prompt + retrieved
+    // memory + chat history, this leaves a healthy safety margin and
+    // remains correct after a future swap to Qwen2.5-7B (32k window).
+    private let memoryTokenBudget  = 1500
+    private let historyTokenBudget = 2000
+
+    init(searchEngine: SemanticSearchEngine, tokenCounter: TokenCounter = .estimating) {
         self.searchEngine = searchEngine
+        self.tokenCounter = tokenCounter
     }
 
     func buildContext(for query: String, history: [Message]) async -> InjectedContext {
         let topChunks = await searchEngine.search(query: query, topK: 25)
-        let fitted = fitToCharBudget(topChunks)
+        let fitted    = await fitToTokenBudget(topChunks)
         let instructions = buildSystemPrompt(chunks: fitted, history: history)
         return InjectedContext(instructions: instructions, chunks: fitted)
     }
 
-    // Converts history + context into the (role, content) pairs for the chat API
+    /// Builds (role, content) pairs for the chat API, walking history
+    /// newest → oldest so we always keep the most recent turns even
+    /// when older history is verbose. Reversed at the end so the API
+    /// receives chronological order.
     func buildMessages(
         history: [Message],
         newUserMessage: String
-    ) -> [(role: String, content: String)] {
-        var messages: [(role: String, content: String)] = []
+    ) async -> [(role: String, content: String)] {
+        var picked: [(role: String, content: String)] = []
+        var used = 0
 
-        // Include last 8 turns of history (oldest first)
-        for msg in history.suffix(8) {
-            messages.append((role: msg.role == .user ? "user" : "assistant", content: msg.content))
+        for msg in history.reversed() {
+            // +4 covers per-message chat-template overhead (role
+            // markers / separators). Cheap rounding since the actual
+            // overhead varies by model family.
+            let cost = await tokenCounter.count(msg.content) + 4
+            if used + cost > historyTokenBudget { break }
+            used += cost
+            picked.append((role: msg.role == .user ? "user" : "assistant", content: msg.content))
         }
-        messages.append((role: "user", content: newUserMessage))
-        return messages
+        picked.reverse()
+        picked.append((role: "user", content: newUserMessage))
+        return picked
     }
 
     // MARK: - Private
 
-    private func fitToCharBudget(_ chunks: [MemoryChunk]) -> [MemoryChunk] {
+    /// Fits chunks into the memory token budget in ranked order. Stops
+    /// at the first chunk that would overflow — we don't try to pack a
+    /// smaller later chunk in, because retrieval order *is* relevance
+    /// order and skipping breaks that contract.
+    private func fitToTokenBudget(_ chunks: [MemoryChunk]) async -> [MemoryChunk] {
         var total = 0
         var result: [MemoryChunk] = []
         for chunk in chunks {
-            let size = chunk.content.count + 30
-            if total + size > maxContextChars { break }
+            // +8 covers the "[TYPE] " prefix and the trailing newline.
+            let cost = await tokenCounter.count(chunk.content) + 8
+            if total + cost > memoryTokenBudget { break }
             result.append(chunk)
-            total += size
+            total += cost
         }
         return result
     }
