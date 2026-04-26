@@ -20,6 +20,8 @@ final class AppContainer: ObservableObject {
     let reminderService: ReminderCreationService
     let calendarEventService: CalendarEventCreationService
     let retrievalEval: RetrievalEval
+    let toolRegistry: ToolRegistry
+    let agentLoop: AgentLoop
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -66,7 +68,11 @@ final class AppContainer: ObservableObject {
 
         self.reminderService      = ReminderCreationService()
         self.calendarEventService = CalendarEventCreationService()
-        self.retrievalEval        = RetrievalEval(searchEngine: search)
+        self.retrievalEval = RetrievalEval(searchEngine: search)
+
+        let registry = ToolRegistry(searchEngine: search)
+        self.toolRegistry = registry
+        self.agentLoop    = AgentLoop(llmService: self.llmService, registry: registry)
     }
 
     // MARK: - Bootstrap

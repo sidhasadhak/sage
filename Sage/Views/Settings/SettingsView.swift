@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage("app_color_scheme") private var colorSchemeRaw: String = AppColorScheme.system.rawValue
     @AppStorage("sage_user_name") private var userName: String = ""
     @AppStorage("indexing_period_months") private var indexingPeriodMonths: Int = 3
+    @AppStorage("agent_loop_enabled") private var agentLoopEnabled: Bool = false
     @State private var showIndexConfirm = false
     @State private var showClearConfirm = false
     @State private var isIndexing = false
@@ -49,10 +50,13 @@ struct SettingsView: View {
                 Section {
                     aiModelStatusRow
                     modelStorageRow
+                    Toggle(isOn: $agentLoopEnabled) {
+                        Label("Agent Mode", systemImage: "gearshape.2")
+                    }
                 } header: {
                     Text("AI Models")
                 } footer: {
-                    Text("Sage uses two private, on-device models. No data ever leaves your iPhone.")
+                    Text("Sage uses two private, on-device models. No data ever leaves your iPhone.\n\nAgent Mode lets Sage call tools (search memory, check your calendar, look up photos) before answering, for more accurate multi-step responses. Slightly slower on simple questions.")
                 }
 
                 // MARK: — Permissions
