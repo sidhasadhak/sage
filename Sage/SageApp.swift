@@ -13,7 +13,10 @@ struct SageApp: App {
             Note.self,
             MemoryChunk.self,
             ImportedEmail.self,
-            LocalModel.self
+            LocalModel.self,
+            // v1.2 phase-0: audit log of every model call & data access.
+            // Lives in the same store so it inherits NSFileProtection.
+            AuditEvent.self
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         let modelContainer = try! ModelContainer(for: schema, configurations: [config])

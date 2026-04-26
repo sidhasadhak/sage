@@ -24,6 +24,19 @@ final class AppContainer: ObservableObject {
     let agentLoop: AgentLoop
     let sharedContentIndexer: SharedContentIndexer
 
+    // ── v1.2 Phase-0 plumbing ────────────────────────────────────────
+    // None of these are wired into the chat path yet — they're
+    // available to subsequent phases. Wiring lives in:
+    //   • Phase 1 (Action layer) → consumes `intentRouter`
+    //   • Phase 7 (Privacy)      → consumes `auditLogger`
+    //   • Phase 8 (Thermal)      → consumes `resourceBudget`
+    //
+    // Resource budget is `@Published`-bearing, so it's instantiated
+    // even pre-wiring so the View layer can already bind to it.
+    let resourceBudget: ResourceBudget
+    let auditLogger: AuditLogger
+    let intentRouter: any IntentRouter
+
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
         let context = modelContainer.mainContext
@@ -78,6 +91,22 @@ final class AppContainer: ObservableObject {
         let registry = ToolRegistry(searchEngine: search)
         self.toolRegistry = registry
         self.agentLoop    = AgentLoop(llmService: self.llmService, registry: registry)
+
+        // ── v1.2 Phase-0 plumbing initialisation ─────────────────────
+        // Order matters: ResourceBudget has no deps; AuditLogger needs
+        // the model context; IntentRouterFactory chooses the right
+        // backend based on FoundationModels availability.
+        self.resourceBudget = ResourceBudget()
+        self.auditLogger    = AuditLogger(modelContext: context)
+        self.intentRouter   = IntentRouterFactory.make(llmService: self.llmService)
+
+        // Tiny breadcrumb so the very first audit row shows boot order.
+        // Phase 7's audit screen will render these chronologically.
+        self.auditLogger.recordSuccess(
+            actor: .privacy,
+            action: "boot",
+            metadata: ["router": self.intentRouter.implementationName]
+        )
     }
 
     // MARK: - Bootstrap
