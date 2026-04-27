@@ -42,33 +42,35 @@ struct CatalogModel: Identifiable, Hashable {
 
 // MARK: - ModelCatalog
 //
-// `sage-slim` ships with exactly one model: Qwen2.5-3B-Instruct.
+// `sage-slim` ships with exactly one model: Qwen3-4B-Instruct (2507).
 // SmolVLM and the entire photo/vision stack have been removed from
 // this build — the goal is to nail the agent + retrieval + action
 // loop on a single, well-tested writer before adding modalities back.
 //
-// Why Qwen2.5-3B-Instruct-4bit:
-//   • Same on-disk footprint as Llama 3.2 3B (~1.8 GB).
-//   • Markedly better at JSON/structured-output instruction following,
-//     which the IntentRouter fallback path relies on.
-//   • 32k context window vs Llama's 8k — gives the agent loop more
-//     headroom under the new context-budget caps.
-//   • Permissively-licensed, mature MLX port, runs at >25 tok/s on
+// Why Qwen3-4B-Instruct-2507-4bit:
+//   • Newer Qwen3 family — measurably stronger instruction following
+//     and tool-call discipline than the 2.5 series at similar size.
+//   • Text-only, mlx-lm compatible (NOT mlx-vlm) — drops cleanly into
+//     LLMService.loadModel without resurrecting the vision factory.
+//   • 256k native context window — the agent loop can hold many more
+//     retrieved chunks without our Phase-3 budget caps biting in.
+//   • 4-bit quantization, ~2.26 GB on disk. Sustained ~20 tok/s on
 //     A17 Pro / M-series GPUs.
+//   • Apache 2.0; mature mlx-community port (22k+ monthly downloads).
 
 enum ModelCatalog {
 
     static let chatModel = CatalogModel(
-        id: "mlx-community/Qwen2.5-3B-Instruct-4bit",
-        displayName: "Qwen 2.5 · 3B",
+        id: "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+        displayName: "Qwen 3 · 4B",
         family: "Qwen",
-        description: "Alibaba's Qwen 2.5 3B-Instruct — strong instruction following, 32k context, runs comfortably on Apple Silicon. Sage's primary brain.",
-        parameterCount: "3B",
-        sizeGB: 1.8,
-        contextLength: 32_768,
+        description: "Alibaba's Qwen 3 4B-Instruct (2507 release) — strong instruction following, 256k context, solid tool calling. Sage's primary brain.",
+        parameterCount: "4B",
+        sizeGB: 2.3,
+        contextLength: 262_144,
         quantization: "4-bit",
-        tags: [.recommended, .fast, .capable],
-        minimumRAMGB: 4
+        tags: [.recommended, .capable, .reasoning],
+        minimumRAMGB: 6
     )
 
     /// Both-models compatibility shim. `sage-slim` ships only a chat

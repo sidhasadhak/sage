@@ -232,7 +232,7 @@ final class LLMServiceRouter: IntentRouter {
 
     /// `nonisolated` so callers from any actor can read it without an
     /// `await`; `let` keeps it trivially thread-safe.
-    nonisolated let implementationName = "Qwen 2.5 3B (fallback)"
+    nonisolated let implementationName = "Qwen 3 4B (fallback)"
 
     private let llmService: LLMService
 
