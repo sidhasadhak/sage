@@ -75,16 +75,24 @@ protocol IntentRouter: Sendable {
 }
 
 enum IntentRouterFactory {
-    /// Returns the best available router for the current device.
-    /// Always non-nil — the LLM fallback is the floor.
+    /// Returns the best available router for the current device,
+    /// wrapped in the regex fast-path so obvious action triggers
+    /// ("remind me to…", "schedule a meeting…") never depend on the
+    /// underlying model answering reliably. The wrapped router still
+    /// owns every input that doesn't match a deterministic pattern.
     @MainActor
     static func make(llmService: LLMService) -> any IntentRouter {
+        let backend: any IntentRouter
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *), AppleFoundationRouter.isSupported {
-            return AppleFoundationRouter()
+            backend = AppleFoundationRouter()
+        } else {
+            backend = LLMServiceRouter(llmService: llmService)
         }
+        #else
+        backend = LLMServiceRouter(llmService: llmService)
         #endif
-        return LLMServiceRouter(llmService: llmService)
+        return RegexFastPathRouter(wrapping: backend)
     }
 }
 
