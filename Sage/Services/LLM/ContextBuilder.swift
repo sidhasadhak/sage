@@ -146,6 +146,31 @@ final class ContextBuilder {
         Be warm, concise, and specific. Reference personal context naturally when relevant.\(nameInstruction)
         """)
 
+        // ── Anti-hallucination access guard ────────────────────────
+        // Small writers (Llama 3.2 3B fallback path) sometimes default
+        // to "I don't have access to your calendar / photos" even when
+        // the chunks are right there in context. Tell them explicitly:
+        // the data is already loaded; if a specific item isn't in the
+        // chunks, the correct response is "I don't have that on file",
+        // never "I can't access that".
+        let presentSources = Set(chunks.map { $0.sourceType })
+        if !presentSources.isEmpty {
+            let humanReadable: [(MemoryChunk.SourceType, String)] = [
+                (.event,    "calendar events"),
+                (.reminder, "reminders"),
+                (.contact,  "contacts"),
+                (.photo,    "photos"),
+                (.note,     "notes"),
+                (.email,    "emails")
+            ]
+            let names = humanReadable.compactMap { presentSources.contains($0.0) ? $0.1 : nil }
+            if !names.isEmpty {
+                parts.append("""
+                Access reminder: the user's \(names.joined(separator: ", ")) are ALREADY loaded for this turn — they appear below as numbered chunks. Do NOT reply that you "don't have access" or "can't see" the user's calendar/photos/contacts/etc.; you can. If a specific item isn't present in the chunks, say "I don't have that on file" instead. Never invent dates, titles, names, or other facts that aren't in the chunks.
+                """)
+            }
+        }
+
         // ── Phase-2: numbered chunks + citation discipline ─────────
         let (numbered, sourceIDs) = CitationRenderer.numbered(chunks)
         if !numbered.isEmpty {
