@@ -25,6 +25,12 @@ final class LiveContextProvider {
 
     private let store = EKEventStore()
 
+    /// `nonisolated` so callers from any actor (and default-argument
+    /// resolution in `ContextBuilder.init`) can construct one without
+    /// hopping to the main actor. The instance methods that touch
+    /// EventKit / Date stay main-actor isolated.
+    nonisolated init() {}
+
     /// Cap on how many events / reminders we inline. We cap by item
     /// count rather than character length because each item is small;
     /// 20 events covers a busy week comfortably and leaves prompt
