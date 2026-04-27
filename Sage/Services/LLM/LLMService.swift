@@ -1,8 +1,6 @@
 import Foundation
-import UIKit
 import MLX
 import MLXLLM
-import MLXVLM
 import MLXLMCommon
 import Tokenizers
 
@@ -149,22 +147,17 @@ final class LLMService {
         let localURL    = localModel.localURL
 
         do {
+            // sage-slim: vision factory removed. The single chat model
+            // (Qwen 2.5 3B) is text-only.
             let extraEOS: Set<String> = catalogModel?.family == "Gemma" ? ["<end_of_turn>"] : []
-            let config       = ModelConfiguration(directory: localURL, extraEOSTokens: extraEOS)
-            let useVLMFactory = ModelCatalog.isVisionCapable(for: localModel.catalogID)
+            let config = ModelConfiguration(directory: localURL, extraEOSTokens: extraEOS)
 
             let loaded = try await Task.detached(priority: .userInitiated) {
                 MLX.Memory.cacheLimit = 0
 
                 let tokenizerLoader = LocalTokenizerLoader()
-                let container: ModelContainer
-                if useVLMFactory {
-                    container = try await VLMModelFactory.shared.loadContainer(
-                        from: NoOpDownloader(), using: tokenizerLoader, configuration: config)
-                } else {
-                    container = try await LLMModelFactory.shared.loadContainer(
-                        from: NoOpDownloader(), using: tokenizerLoader, configuration: config)
-                }
+                let container = try await LLMModelFactory.shared.loadContainer(
+                    from: NoOpDownloader(), using: tokenizerLoader, configuration: config)
 
                 MLX.Memory.cacheLimit = 256 * 1024 * 1024
                 return container
@@ -194,16 +187,9 @@ final class LLMService {
 
     var isGenerating: Bool { state == .generating }
 
-    var isVisionCapable: Bool {
-        guard let id = loadedModelID else { return false }
-        return ModelCatalog.isVisionCapable(for: id)
-    }
-
-    /// True when the photo-analysis (SmolVLM) model is currently loaded.
-    var isPhotoAnalysisModelActive: Bool {
-        guard let id = loadedModelID else { return false }
-        return ModelCatalog.isPhotoAnalysisModel(for: id)
-    }
+    // sage-slim: removed isVisionCapable / isPhotoAnalysisModelActive.
+    // The single chat model is text-only; callers that previously
+    // gated photo captioning on these no longer need to.
 
     // MARK: - Generation (chat)
 
@@ -614,48 +600,9 @@ final class LLMService {
         return words.isEmpty ? "Voice Note" : String(words.prefix(60))
     }
 
-    func generateCaption(for image: UIImage) async throws -> String {
-        #if targetEnvironment(simulator)
-        return "Photo captured on device"
-        #else
-        guard case .ready = state, !isBackgroundProcessing,
-              let container = modelContainer else { throw ModelError.noModelSelected }
-        guard isVisionCapable else {
-            throw ModelError.loadFailed("Active model does not support vision")
-        }
-        guard let ciImage = CIImage(image: image) else {
-            throw ModelError.loadFailed("Could not process image")
-        }
-
-        isBackgroundProcessing = true
-        defer { isBackgroundProcessing = false }
-
-        let userInput = UserInput(chat: [
-            .user(
-                """
-                Describe this photo for search. In ONE compact paragraph (≤80 words), list:
-                • Scene / setting (indoor or outdoor, type of place).
-                • Objects, animals, vehicles, food visible.
-                • People (count, approximate ages, what they are doing) — never invent names.
-                • Any visible text, signs, license plates, numbers, brands.
-                • Colours, lighting, weather, time of day if obvious.
-                • Activity or event happening.
-                Be specific and factual. No opinions, no metaphors, no "I see".
-                """,
-                images: [.ciImage(ciImage)]
-            )
-        ])
-        let params  = GenerateParameters(maxTokens: 200, temperature: 0.3, topP: 0.9)
-        let lmInput = try await container.prepare(input: userInput)
-
-        guard case .ready = state else { return "Photo" }
-
-        let stream = try await container.generate(input: lmInput, parameters: params)
-        var output = ""
-        for await generation in stream {
-            if case .chunk(let text) = generation { output += text }
-        }
-        return output.trimmingCharacters(in: .whitespacesAndNewlines)
-        #endif
-    }
+    // sage-slim: generateCaption(for:) removed. The vision model
+    // (SmolVLM) and the entire photo indexing path were stripped to
+    // focus on a tight agent + retrieval + action loop. Photos can
+    // be reintroduced behind a Qwen2-VL backed service in a later
+    // phase without resurrecting the SmolVLM-256M caption quality.
 }

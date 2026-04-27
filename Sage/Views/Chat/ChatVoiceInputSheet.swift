@@ -145,12 +145,18 @@ struct ChatVoiceInputSheet: View {
             return
         }
         phase = .transcribing
-        if let text = try? await TranscriptionService.shared.transcribe(fileURL: url),
-           !text.trimmingCharacters(in: .whitespaces).isEmpty {
-            phase = .done(text)
-        } else {
+        // sage-slim: auto-send. The old flow (.done → "Use Text" button →
+        // text pasted into input → user taps Send) is gone. Stop tap →
+        // transcribe → fire onTranscription → dismiss. Three taps become
+        // one. If transcription is wrong the user sees it land in the
+        // chat as a user message and can edit / re-record.
+        guard let text = try? await TranscriptionService.shared.transcribe(fileURL: url),
+              !text.trimmingCharacters(in: .whitespaces).isEmpty else {
             phase = .error("Couldn't transcribe — please try again.")
+            return
         }
+        onTranscription(text)
+        dismiss()
     }
 }
 

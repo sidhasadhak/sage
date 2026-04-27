@@ -275,12 +275,8 @@ struct MemoryBrowserView: View {
         .sheet(item: $selectedNote) { note in
             NoteEditorView(note: note, viewModel: nil)
         }
-        .fullScreenCover(item: Binding(
-            get: { selectedPhotoID.map { IdentifiableString(value: $0) } },
-            set: { selectedPhotoID = $0?.value }
-        )) { item in
-            PhotoViewerView(assetID: item.value)
-        }
+        // sage-slim: PhotoViewerView removed with the photo stack.
+        // Tapping a legacy .photo chunk falls through to no-op below.
         .sheet(item: Binding(
             get: { selectedContactID.map { IdentifiableString(value: $0) } },
             set: { selectedContactID = $0?.value }
@@ -478,7 +474,13 @@ struct MemoryBrowserView: View {
     private func openChunk(_ chunk: MemoryChunk) {
         switch chunk.sourceType {
         case .photo:
-            selectedPhotoID = chunk.sourceID
+            // sage-slim: tapping a legacy photo chunk opens the
+            // system Photos app to its library. We can't deep-link to
+            // a specific asset without our own viewer, which the slim
+            // build dropped along with the rest of the photo stack.
+            if let url = URL(string: "photos-redirect://") {
+                UIApplication.shared.open(url)
+            }
 
         case .contact:
             selectedContactID = chunk.sourceID

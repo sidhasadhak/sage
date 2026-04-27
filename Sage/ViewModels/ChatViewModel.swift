@@ -37,7 +37,7 @@ final class ChatViewModel {
     /// `actionRunner.rollback(...)` if the user taps Undo.
     private var pendingAction: AnyAction?
 
-    private(set) var photoAssetIDs: [String] = []
+    // sage-slim: photoAssetIDs removed with the photo stack.
 
     private let llmService: LLMService
     private let contextBuilder: ContextBuilder
@@ -157,7 +157,7 @@ final class ChatViewModel {
         // user can still view the audit log for older actions.
         lastReceipt = nil
         lastReceiptAction = nil
-        photoAssetIDs = []
+        // sage-slim: photoAssetIDs cleanup removed with the photo stack.
 
         let userMessage = Message(role: .user, content: trimmed)
         conversation.messages.append(userMessage)
@@ -267,10 +267,7 @@ final class ChatViewModel {
             let context = await contextBuilder.buildContext(for: trimmed, history: Array(history))
             let chatMessages = await contextBuilder.buildMessages(history: Array(history), newUserMessage: trimmed)
 
-            let photoIDs = context.chunks
-                .filter { $0.sourceType == .photo }
-                .map { $0.sourceID }
-            if !photoIDs.isEmpty { photoAssetIDs = photoIDs }
+            // sage-slim: photo extraction removed with the photo stack.
 
             let response: String
 

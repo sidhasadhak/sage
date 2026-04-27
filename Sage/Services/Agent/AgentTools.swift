@@ -151,45 +151,6 @@ struct SearchMemoryTool: AgentTool {
     }
 }
 
-/// Convenience wrapper around `search_memory` constrained to photos.
-/// The model could call `search_memory(source_types=["photo"])`, but a
-/// dedicated tool yields better tool-selection accuracy on small models.
-struct SearchPhotosTool: AgentTool {
-    let name = "search_photos"
-    let description = """
-    Search the user's photo library by what's in the image (caption + location). \
-    Use when the user explicitly asks for photos or pictures.
-    """
-
-    let parametersSchema: [String: AnySendable] = [
-        "type": .string("object"),
-        "properties": .object([
-            "query": .object([
-                "type": .string("string"),
-                "description": .string("What the user is looking for in photos (e.g. 'beach sunsets', 'parking ticket').")
-            ])
-        ]),
-        "required": .array([.string("query")])
-    ]
-
-    let searchEngine: SemanticSearchEngine
-
-    @MainActor
-    func execute(arguments: [String: AnySendable]) async throws -> String {
-        guard let query = arguments["query"]?.asString, !query.isEmpty else {
-            return "Error: missing 'query' argument."
-        }
-        let raw = await searchEngine.search(query: query, topK: 25)
-        let photos = raw.filter { $0.sourceType == .photo }.prefix(8)
-        if photos.isEmpty {
-            return "No matching photos found for '\(query)'."
-        }
-        return photos.enumerated().map { i, chunk in
-            "\(i + 1). \(chunk.content.prefix(180))"
-        }.joined(separator: "\n")
-    }
-}
-
 /// List events on the user's calendar in the next N days. Pulls
 /// directly from EventKit so it stays current even between indexing
 /// passes (events created today won't be in the embedding index yet).
@@ -284,7 +245,7 @@ final class ToolRegistry {
         self.tools = [
             CurrentDateTimeTool(),
             SearchMemoryTool(searchEngine: searchEngine),
-            SearchPhotosTool(searchEngine: searchEngine),
+            // sage-slim: SearchPhotosTool removed with the photo stack.
             ListUpcomingEventsTool()
         ]
     }

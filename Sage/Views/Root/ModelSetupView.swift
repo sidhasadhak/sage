@@ -5,8 +5,7 @@ import SwiftUI
 struct ModelSetupView: View {
     @EnvironmentObject var container: AppContainer
 
-    private var chatDownload:  DownloadState? { container.modelManager.downloads[ModelCatalog.chatModel.id] }
-    private var photoDownload: DownloadState? { container.modelManager.downloads[ModelCatalog.photoAnalysisModel.id] }
+    private var chatDownload: DownloadState? { container.modelManager.downloads[ModelCatalog.chatModel.id] }
 
     var body: some View {
         VStack(spacing: 32) {
@@ -28,7 +27,7 @@ struct ModelSetupView: View {
                     .padding(.horizontal, 32)
             }
 
-            // Model rows
+            // sage-slim: single chat model — photo download row removed.
             VStack(spacing: 16) {
                 ModelDownloadRow(
                     name: ModelCatalog.chatModel.displayName,
@@ -39,16 +38,6 @@ struct ModelSetupView: View {
                     isComplete: container.modelManager.chatModel != nil,
                     downloadState: chatDownload
                 )
-
-                ModelDownloadRow(
-                    name: ModelCatalog.photoAnalysisModel.displayName,
-                    description: "Photo understanding & captioning",
-                    icon: "photo.fill",
-                    iconColor: .purple,
-                    sizeGB: ModelCatalog.photoAnalysisModel.sizeGB,
-                    isComplete: container.modelManager.photoModel != nil,
-                    downloadState: photoDownload
-                )
             }
             .padding(.horizontal, 24)
 
@@ -58,8 +47,7 @@ struct ModelSetupView: View {
                     .tint(.accentColor)
                     .padding(.horizontal, 24)
 
-                let totalGB = ModelCatalog.chatModel.sizeGB + ModelCatalog.photoAnalysisModel.sizeGB
-                Text(String(format: "%.1f GB total · Wi-Fi recommended", totalGB))
+                Text(String(format: "%.1f GB · Wi-Fi recommended", ModelCatalog.chatModel.sizeGB))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -29,8 +29,9 @@ struct DownloadState {
 
 // MARK: - ModelManager
 
-/// Manages the two fixed Sage models (chat + photo analysis).
-/// Download states are exposed so ModelSetupView can show progress.
+/// `sage-slim`: manages the single chat model. SmolVLM and the photo
+/// analysis stack have been removed — see ModelCatalog.swift for the
+/// rationale.
 @Observable
 @MainActor
 final class ModelManager {
@@ -43,22 +44,18 @@ final class ModelManager {
     /// The downloaded chat model record (nil = not yet downloaded).
     private(set) var chatModel: LocalModel?
 
-    /// The downloaded photo-analysis model record (nil = not yet downloaded).
-    private(set) var photoModel: LocalModel?
+    /// True once the chat model is on disk and ready to load.
+    /// Old name kept for callsite compatibility (ContentView gates
+    /// the onboarding sheet on this).
+    var bothModelsDownloaded: Bool { chatModel != nil }
 
-    /// True once both models are on disk and ready to load.
-    var bothModelsDownloaded: Bool { chatModel != nil && photoModel != nil }
-
-    /// Overall 0–1 progress across both downloads (used by setup screen).
+    /// Single-model overall progress (0–1).
     var overallProgress: Double {
-        let chatP  = downloads[ModelCatalog.chatModel.id]?.progress  ?? (chatModel  != nil ? 1.0 : 0.0)
-        let photoP = downloads[ModelCatalog.photoAnalysisModel.id]?.progress ?? (photoModel != nil ? 1.0 : 0.0)
-        return (chatP + photoP) / 2.0
+        downloads[ModelCatalog.chatModel.id]?.progress ?? (chatModel != nil ? 1.0 : 0.0)
     }
 
     var totalStorageGB: Double {
-        (chatModel != nil ? ModelCatalog.chatModel.sizeGB : 0)
-            + (photoModel != nil ? ModelCatalog.photoAnalysisModel.sizeGB : 0)
+        chatModel != nil ? ModelCatalog.chatModel.sizeGB : 0
     }
 
     private let modelContext: ModelContext
@@ -67,26 +64,25 @@ final class ModelManager {
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
-        chatModel  = fetchLocalModel(for: ModelCatalog.chatModel.id)
-        photoModel = fetchLocalModel(for: ModelCatalog.photoAnalysisModel.id)
+        chatModel = fetchLocalModel(for: ModelCatalog.chatModel.id)
     }
 
     // MARK: - Download
 
-    /// Starts downloading whichever models are not yet on disk.
+    /// Kicks off the chat-model download if it isn't already on disk.
+    /// Old name (`downloadAllModels`) preserved for callers in
+    /// ModelSetupView / ContentView.
     func downloadAllModels() {
-        startDownloadIfNeeded(ModelCatalog.chatModel,          existing: chatModel)
-        startDownloadIfNeeded(ModelCatalog.photoAnalysisModel, existing: photoModel)
+        startDownloadIfNeeded(ModelCatalog.chatModel, existing: chatModel)
     }
 
     /// Re-download a specific model (deletes the existing record first).
     func redownload(_ catalog: CatalogModel) {
-        let existing = catalog.isPhotoAnalysisModel ? photoModel : chatModel
-        if let existing {
+        if let existing = chatModel {
             try? FileManager.default.removeItem(at: existing.localURL)
             modelContext.delete(existing)
             try? modelContext.save()
-            if catalog.isPhotoAnalysisModel { photoModel = nil } else { chatModel = nil }
+            chatModel = nil
         }
         startDownload(catalog)
     }
@@ -99,8 +95,7 @@ final class ModelManager {
 
     func delete(_ model: LocalModel) {
         try? FileManager.default.removeItem(at: model.localURL)
-        if model.catalogID == ModelCatalog.chatModel.id          { chatModel  = nil }
-        if model.catalogID == ModelCatalog.photoAnalysisModel.id { photoModel = nil }
+        if model.catalogID == ModelCatalog.chatModel.id { chatModel = nil }
         modelContext.delete(model)
         try? modelContext.save()
     }
@@ -108,7 +103,7 @@ final class ModelManager {
     // MARK: - Helpers
 
     func localModel(for catalogID: String) -> LocalModel? {
-        catalogID == ModelCatalog.chatModel.id ? chatModel : photoModel
+        catalogID == ModelCatalog.chatModel.id ? chatModel : nil
     }
 
     // MARK: - Private
@@ -176,7 +171,7 @@ final class ModelManager {
             modelContext.insert(localModel)
             try? modelContext.save()
 
-            if catalog.isPhotoAnalysisModel { photoModel = localModel } else { chatModel = localModel }
+            chatModel = localModel
             downloads.removeValue(forKey: catalog.id)
 
         } catch {

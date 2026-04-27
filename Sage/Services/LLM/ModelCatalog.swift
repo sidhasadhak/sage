@@ -1,18 +1,16 @@
 import Foundation
 
 struct CatalogModel: Identifiable, Hashable {
-    let id: String                  // HuggingFace repo ID, e.g. "mlx-community/Llama-3.2-3B-Instruct-4bit"
+    let id: String                  // HuggingFace repo ID
     let displayName: String
-    let family: String              // "Llama", "SmolVLM", etc.
+    let family: String              // "Qwen", "Llama", etc.
     let description: String
-    let parameterCount: String      // "1B", "3B", etc.
+    let parameterCount: String      // "3B", "1.5B", etc.
     let sizeGB: Double
     let contextLength: Int
-    let quantization: String        // "4-bit", "bf16"
+    let quantization: String        // "4-bit"
     let tags: [Tag]
     let minimumRAMGB: Int
-    let isVisionCapable: Bool
-    let isPhotoAnalysisModel: Bool  // true only for the dedicated photo-captioning model
 
     enum Tag: String {
         case recommended = "Recommended"
@@ -21,22 +19,18 @@ struct CatalogModel: Identifiable, Hashable {
         case multilingual = "Multilingual"
         case compact = "Compact"
         case reasoning = "Reasoning"
-        case vision = "Vision"
-        case photoAnalysis = "Photo Analysis"
     }
 
     init(
         id: String, displayName: String, family: String, description: String,
         parameterCount: String, sizeGB: Double, contextLength: Int,
-        quantization: String, tags: [Tag], minimumRAMGB: Int,
-        isVisionCapable: Bool, isPhotoAnalysisModel: Bool = false
+        quantization: String, tags: [Tag], minimumRAMGB: Int
     ) {
         self.id = id; self.displayName = displayName; self.family = family
         self.description = description; self.parameterCount = parameterCount
         self.sizeGB = sizeGB; self.contextLength = contextLength
         self.quantization = quantization; self.tags = tags
-        self.minimumRAMGB = minimumRAMGB; self.isVisionCapable = isVisionCapable
-        self.isPhotoAnalysisModel = isPhotoAnalysisModel
+        self.minimumRAMGB = minimumRAMGB
     }
 
     var localDirectoryName: String {
@@ -47,58 +41,42 @@ struct CatalogModel: Identifiable, Hashable {
 }
 
 // MARK: - ModelCatalog
+//
+// `sage-slim` ships with exactly one model: Qwen2.5-3B-Instruct.
+// SmolVLM and the entire photo/vision stack have been removed from
+// this build — the goal is to nail the agent + retrieval + action
+// loop on a single, well-tested writer before adding modalities back.
+//
+// Why Qwen2.5-3B-Instruct-4bit:
+//   • Same on-disk footprint as Llama 3.2 3B (~1.8 GB).
+//   • Markedly better at JSON/structured-output instruction following,
+//     which the IntentRouter fallback path relies on.
+//   • 32k context window vs Llama's 8k — gives the agent loop more
+//     headroom under the new context-budget caps.
+//   • Permissively-licensed, mature MLX port, runs at >25 tok/s on
+//     A17 Pro / M-series GPUs.
 
-/// Sage uses exactly two hard-coded models:
-///  • chatModel          — Llama 3.2 3B  (general-purpose Q&A and reasoning)
-///  • photoAnalysisModel — SmolVLM 256M  (lightweight vision; used only during photo indexing)
 enum ModelCatalog {
 
-    // MARK: - Fixed models
-
     static let chatModel = CatalogModel(
-        id: "mlx-community/Llama-3.2-3B-Instruct-4bit",
-        displayName: "Llama 3.2 · 3B",
-        family: "Llama",
-        description: "Meta's Llama 3.2 3B — fast, capable, and great for everyday Q&A, summaries, and reasoning. The primary Sage brain.",
+        id: "mlx-community/Qwen2.5-3B-Instruct-4bit",
+        displayName: "Qwen 2.5 · 3B",
+        family: "Qwen",
+        description: "Alibaba's Qwen 2.5 3B-Instruct — strong instruction following, 32k context, runs comfortably on Apple Silicon. Sage's primary brain.",
         parameterCount: "3B",
         sizeGB: 1.8,
-        contextLength: 8192,
+        contextLength: 32_768,
         quantization: "4-bit",
-        tags: [.recommended, .fast],
-        minimumRAMGB: 4,
-        isVisionCapable: false,
-        isPhotoAnalysisModel: false
+        tags: [.recommended, .fast, .capable],
+        minimumRAMGB: 4
     )
 
-    static let photoAnalysisModel = CatalogModel(
-        id: "mlx-community/SmolVLM-256M-Instruct-bf16",
-        displayName: "SmolVLM · 256M",
-        family: "SmolVLM",
-        description: "HuggingFace's tiny 256M vision model. Used exclusively to caption your photos so they become searchable. Runs only during background indexing.",
-        parameterCount: "256M",
-        sizeGB: 0.5,
-        contextLength: 16384,
-        quantization: "bf16",
-        tags: [.compact, .vision, .photoAnalysis],
-        minimumRAMGB: 4,
-        isVisionCapable: true,
-        isPhotoAnalysisModel: true
-    )
-
-    // MARK: - Convenience
-
-    /// Both models together — used for storage accounting and download checks.
-    static var all: [CatalogModel] { [chatModel, photoAnalysisModel] }
+    /// Both-models compatibility shim. `sage-slim` ships only a chat
+    /// model — `all` is a single-element array. Code that previously
+    /// iterated for storage accounting / download checks still works.
+    static var all: [CatalogModel] { [chatModel] }
 
     static func model(for id: String) -> CatalogModel? {
         all.first { $0.id == id }
-    }
-
-    static func isVisionCapable(for catalogID: String) -> Bool {
-        all.first { $0.id == catalogID }?.isVisionCapable ?? false
-    }
-
-    static func isPhotoAnalysisModel(for catalogID: String) -> Bool {
-        all.first { $0.id == catalogID }?.isPhotoAnalysisModel ?? false
     }
 }

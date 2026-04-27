@@ -157,7 +157,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Memory Index")
                 } footer: {
-                    Text("Items already indexed are kept. Photos are re-captioned automatically using the SmolVLM model during background indexing.")
+                    Text("Items already indexed are kept. Re-indexing pulls in any new notes, contacts, calendar events, and reminders.")
                 }
 
                 // MARK: — Danger Zone

@@ -15,10 +15,7 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             messagesArea
-            if let ids = viewModel?.photoAssetIDs, !ids.isEmpty {
-                PhotoStripView(assetIDs: ids)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+            // sage-slim: PhotoStripView removed with the photo stack.
             inputBar
         }
         .navigationTitle(viewModel?.messages.isEmpty == false ? "Sage" : "New Chat")
@@ -41,8 +38,13 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showVoiceInput) {
             ChatVoiceInputSheet { transcription in
-                inputText = transcription
-                isInputFocused = true
+                // sage-slim: auto-send. The chat-tab voice flow is now
+                // a single tap (mic → record → tap-to-stop → done).
+                // We fire the message straight at the VM rather than
+                // staging it in the input field for a second confirm.
+                let text = transcription.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return }
+                Task { await viewModel?.send(text) }
             }
             .environmentObject(container)
         }

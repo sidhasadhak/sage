@@ -20,7 +20,7 @@ struct DiagnosticsView: View {
     @State private var quantizedCount: Int = 0
     @State private var legacyCount: Int = 0
     @State private var chatModelFiles: ModelIntegrity = .unknown
-    @State private var photoModelFiles: ModelIntegrity = .unknown
+    // sage-slim: photoModelFiles state removed with the photo stack.
     @State private var refreshing = false
     @State private var copiedAt: Date?
     @State private var evalReport: EvalReport?
@@ -106,7 +106,7 @@ struct DiagnosticsView: View {
     private var modelsSection: some View {
         Section("Models") {
             modelRow(name: "Chat", integrity: chatModelFiles, model: container.modelManager.chatModel)
-            modelRow(name: "Photo Vision", integrity: photoModelFiles, model: container.modelManager.photoModel)
+            // sage-slim: Photo Vision row removed.
             row("LLM state", value: llmStateString)
         }
     }
@@ -345,7 +345,7 @@ struct DiagnosticsView: View {
         // file count + size. We don't re-verify SHA here (expensive on
         // multi-GB safetensors). That's the download-time check.
         chatModelFiles = integrity(of: container.modelManager.chatModel)
-        photoModelFiles = integrity(of: container.modelManager.photoModel)
+        // sage-slim: photo model integrity check removed.
     }
 
     private func integrity(of model: LocalModel?) -> ModelIntegrity {
@@ -391,7 +391,7 @@ struct DiagnosticsView: View {
         lines.append("")
         lines.append("MODELS")
         lines.append("  Chat:  \(integrityString(chatModelFiles))")
-        lines.append("  Photo: \(integrityString(photoModelFiles))")
+        // sage-slim: photo model line removed.
         lines.append("  LLM:   \(llmStateString)")
         lines.append("")
         lines.append("RECENT EVENTS")

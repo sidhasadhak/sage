@@ -1,7 +1,6 @@
 import Foundation
 import Combine
 import SwiftData
-import Photos
 import Contacts
 import EventKit
 import BackgroundTasks
@@ -57,7 +56,7 @@ final class IndexingService: ObservableObject {
     // batch so the GPU can release tile memory and the OS can reclaim cache.
     // No caps — every photo in the indexing period is processed; we just
     // pace the work so a large library doesn't trigger OOM.
-    private let photoBatchSize = 10
+    // sage-slim: photoBatchSize removed with the photo indexing path.
 
     private enum DeltaKeys {
         static let photos   = "delta.lastPhotosIndexedAt"
@@ -126,17 +125,10 @@ final class IndexingService: ObservableObject {
             log("Indexing finished — \(indexedCount) chunks total")
         }
 
-        // Order matters: lightweight, no-model sources first. Photos go last
-        // so the Vision (SmolVLM) model is loaded only after every other
-        // source has been indexed and the GPU is otherwise idle.
+        // sage-slim: photo / vision indexing removed.
         await indexCalendar()
         await indexAllNotes()
         await Task.yield()
-        // Vision captioning runs in background OR when SmolVLM is already the
-        // active model (user switched manually). Avoids OOM only when we'd need
-        // to swap two large models while Llama is occupying GPU RAM.
-        let canCaption = isBackgroundRun || (llmService?.isPhotoAnalysisModelActive == true)
-        await indexPhotos(enableCaptioning: canCaption)
 
         // v1.2 Phase-2: piggy-back the daily decay sweep on the
         // indexing wake-up. Internally rate-limited to once per ~20h.
@@ -323,223 +315,6 @@ final class IndexingService: ObservableObject {
         )
     }
 
-    // MARK: - Photos
-
-    /// Indexes photos from the library, walking month-by-month from newest
-    /// to oldest within the configured indexing period. Each month is
-    /// processed as its own small batch; we yield between months so the GPU
-    /// can release tile memory and SwiftData can flush. Without this
-    /// per-month structure the previous flat-cap approach indexed only the
-    /// most recent photos — older months in the period never got reached.
-    ///
-    /// - Parameter enableCaptioning: When `true` (background only), loads
-    ///   SmolVLM to generate semantic captions. Kept `false` during
-    ///   foreground runs to prevent OOM from a two-model swap while Llama
-    ///   is already in GPU RAM.
-    func indexPhotos(enableCaptioning: Bool = false) async {
-        let cal       = Calendar.current
-        let now       = Date()
-        let monthSpan = indexingPeriodMonths
-
-        // Delta: only process photos created since the last successful indexing
-        // pass. When captioning is enabled (VLM active) we must visit all months
-        // to upgrade trivially-indexed photos with real captions. For plain
-        // foreground runs (no VLM) we skip months entirely in the past — nothing
-        // new can be there and we'd just waste SwiftData fetch round-trips.
-        let lastRun = UserDefaults.standard.object(forKey: DeltaKeys.photos) as? Date
-
-        // Build [start, end) ranges, newest month first.
-        var monthRanges: [(start: Date, end: Date)] = []
-        for offset in 0..<monthSpan {
-            guard let monthEnd   = cal.date(byAdding: .month, value: -offset, to: now),
-                  let monthStart = cal.date(byAdding: .month, value: -1, to: monthEnd) else { continue }
-            monthRanges.append((start: monthStart, end: monthEnd))
-        }
-
-        // ─── SmolVLM swap-in (background only) ────────────────────────────
-        // Done once up front so we don't churn the GPU between months.
-        var didSwapToPhotoModel = false
-        if enableCaptioning,
-           let llm = llmService,
-           let mgr = modelManager,
-           let photoLocalModel = mgr.photoModel,
-           !llm.isGenerating,
-           !llm.isBackgroundProcessing {
-
-            if llm.loadedModelID != ModelCatalog.photoAnalysisModel.id {
-                llm.unloadModel()
-                // Brief pause so unload's MLX cache flush completes before
-                // we start allocating fresh weights for SmolVLM.
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                await llm.loadModel(from: photoLocalModel)
-                didSwapToPhotoModel = llm.loadedModelID == ModelCatalog.photoAnalysisModel.id
-            } else {
-                didSwapToPhotoModel = true
-            }
-        }
-        // ──────────────────────────────────────────────────────────────────
-
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-
-        // Walk every month in the period and process every photo in each
-        // month — no caps. Photos are processed in small batches with a
-        // yield + brief sleep between each batch so the GPU can release
-        // tile memory and SwiftData can flush; this keeps memory steady on
-        // libraries with thousands of photos without dropping any.
-        for range in monthRanges {
-            // Skip months entirely before the last run when VLM is not active.
-            // When captioning is on we still visit old months to upgrade any
-            // trivially-indexed photos ("Photo taken on …") with real captions.
-            if let lastRun, !enableCaptioning, range.end <= lastRun { continue }
-
-            // For months that straddle the last-run date (or any newer month),
-            // fetch only photos created after lastRun so we don't re-visit the
-            // swath of already-indexed assets. VLM passes bypass this — they
-            // need to inspect existing chunks for trivial captions.
-            let effectiveStart: Date
-            if let lastRun, !enableCaptioning {
-                effectiveStart = max(range.start, lastRun)
-            } else {
-                effectiveStart = range.start
-            }
-
-            let opts = PHFetchOptions()
-            opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-            opts.predicate = NSPredicate(
-                format: "creationDate >= %@ AND creationDate < %@",
-                effectiveStart as CVarArg, range.end as CVarArg
-            )
-            let result = PHAsset.fetchAssets(with: .image, options: opts)
-            var monthAssets: [PHAsset] = []
-            result.enumerateObjects { a, _, _ in monthAssets.append(a) }
-
-            // Process this month's photos in fixed-size batches.
-            var batchStart = 0
-            while batchStart < monthAssets.count {
-                let batchEnd = min(batchStart + photoBatchSize, monthAssets.count)
-                for i in batchStart..<batchEnd {
-                    await upsertPhotoChunk(monthAssets[i], dateFormatter: dateFormatter)
-                }
-                batchStart = batchEnd
-
-                // Pace between batches so the GPU/SwiftData can recover.
-                await Task.yield()
-                try? await Task.sleep(nanoseconds: 80_000_000)
-            }
-
-            // Slightly longer pause between months — gives the OS a wider
-            // window to reclaim memory before we start the next month.
-            try? await Task.sleep(nanoseconds: 150_000_000)
-        }
-
-        // ─── Restore chat model (background only) ─────────────────────────
-        if didSwapToPhotoModel,
-           let llm = llmService,
-           let chatLocalModel = modelManager?.chatModel {
-            llm.unloadModel()
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            await llm.loadModel(from: chatLocalModel)
-        }
-        // ──────────────────────────────────────────────────────────────────
-    }
-
-    private func upsertPhotoChunk(_ asset: PHAsset, dateFormatter: DateFormatter) async {
-        let date = asset.creationDate.map { dateFormatter.string(from: $0) } ?? "unknown date"
-
-        // Skip if we've already captioned this asset — the per-month walk
-        // re-visits old months on every run, so without this guard we'd
-        // re-run the VLM over the entire library each pass.
-        // Two cases let us skip:
-        //   1. The chunk already has a substantial caption (>40 chars beyond
-        //      the trivial "Photo taken on …" fallback), regardless of model.
-        //   2. The VLM isn't loaded right now — generating a fresh caption
-        //      would only produce the same trivial fallback we already have.
-        let assetID = asset.localIdentifier
-        let existingDescriptor = FetchDescriptor<MemoryChunk>(
-            predicate: #Predicate { $0.sourceID == assetID }
-        )
-        if let existing = try? modelContext.fetch(existingDescriptor).first,
-           !existing.content.isEmpty {
-            // A "real" caption is one that (a) doesn't start with the trivial
-            // fallback prefix AND (b) is long enough to be meaningful — both
-            // conditions must hold. The old `||` incorrectly classified any
-            // sufficiently long string (e.g. a date + location string) as a
-            // real VLM caption and skipped re-captioning forever.
-            let trivialPrefix = "Photo taken on"
-            let hasRealCaption = !existing.content.hasPrefix(trivialPrefix)
-                && existing.content.count > 80
-            let vlmActive = llmService?.isPhotoAnalysisModelActive == true
-            if hasRealCaption || !vlmActive { return }
-        }
-
-        // Caption via SmolVLM — only when the photo-analysis model is active.
-        var caption: String? = nil
-        if let llm = llmService, llm.isPhotoAnalysisModelActive {
-            let options = PHImageRequestOptions()
-            options.isSynchronous          = false
-            // .opportunistic delivers the best available local image rather
-            // than the highly-compressed .fastFormat thumbnail, giving SmolVLM
-            // enough detail to produce accurate captions.
-            options.deliveryMode           = .opportunistic
-            options.isNetworkAccessAllowed = false
-
-            let image = await withCheckedContinuation { continuation in
-                var resumed = false
-                PHImageManager.default().requestImage(
-                    for: asset,
-                    targetSize: CGSize(width: 384, height: 384),
-                    contentMode: .aspectFit,
-                    options: options
-                ) { image, _ in
-                    guard !resumed else { return }
-                    resumed = true
-                    continuation.resume(returning: image)
-                }
-            }
-            if let image {
-                caption = try? await llm.generateCaption(for: image)
-            }
-        }
-
-        // Date is always the first element so every photo chunk is anchored to
-        // a specific point in time — critical for temporal queries like
-        // "show me photos from last Tuesday". The VLM caption (when present)
-        // follows as semantic description; without it we fall back to just the
-        // date so the chunk is still useful for retrieval.
-        var parts: [String] = ["Photo taken on \(date)"]
-        if let caption { parts.append(caption) }
-
-        if let location = asset.location,
-           let request = MKReverseGeocodingRequest(location: location) {
-            // iOS 26+ MapKit reverse-geocoding. Deployment target is 26.4
-            // so the legacy CLGeocoder fallback is unreachable and was
-            // removed (CLGeocoder + CLPlacemark.* are deprecated in 26).
-            do {
-                let items = try await request.mapItems
-                // `MKMapItem.name` typically resolves to the city / locality
-                // for a reverse-geocoded coordinate, which is the granularity
-                // we want for memory captions. `placemark` and the CLPlacemark
-                // fields it exposes are deprecated in iOS 26.
-                if let name = items.first?.name, !name.isEmpty {
-                    parts.append("at \(name)")
-                }
-            } catch {}
-        }
-
-        let content  = parts.joined(separator: " ")
-        var keywords: [String] = []
-        if let caption { keywords.append(caption) }
-
-        await upsertChunk(
-            sourceType: .photo,
-            sourceID: asset.localIdentifier,
-            content: content,
-            keywords: keywords,
-            quality: .fast,
-            sourceDate: asset.creationDate
-        )
-    }
 
     // MARK: - Notes
 
@@ -693,5 +468,5 @@ final class IndexingService: ObservableObject {
     }
 }
 
-import CoreLocation
-import MapKit
+// sage-slim: CoreLocation / MapKit / Photos imports removed with the
+// photo indexing pipeline.
