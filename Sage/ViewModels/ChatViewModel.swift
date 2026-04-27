@@ -84,11 +84,14 @@ final class ChatViewModel {
     var llmState: LLMService.State { llmService.state }
 
     /// Whether agent-loop mode is active. Persisted in UserDefaults so the
-    /// user's preference survives restarts. Default off — single-shot path
-    /// is faster for simple queries.
+    /// user's preference survives restarts.
+    /// sage-slim: defaults to **true**. Without it, "what's on my calendar?"
+    /// only sees stale indexed chunks; with it, list_upcoming_events hits
+    /// EventKit live for fresh, accurate answers. The single-shot path was
+    /// the wrong default for an assistant whose value lives in personal data.
     // Note: @AppStorage can't be used inside @Observable; read/write directly.
     var agentLoopEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: "agent_loop_enabled") }
+        get { (UserDefaults.standard.object(forKey: "agent_loop_enabled") as? Bool) ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "agent_loop_enabled") }
     }
 
@@ -213,11 +216,14 @@ final class ChatViewModel {
                 assistantMessage: assistantMessage
             )
 
-        case .askUser(let question):
-            assistantMessage.content = question
-            try? modelContext.save()
-
-        case .retrieve, .generate, .unknown:
+        // sage-slim: NOTHING short-circuits the chat path except a
+        // confirmed action with a constructable Action instance.
+        // Earlier the .askUser branch was eating "what's on my calendar?"
+        // queries because the small router fell back to "ask for clarity"
+        // — the user-visible result was Sage just echoing "Could you
+        // tell me a bit more?" forever. Retrieval + agent loop should
+        // always run when there's no concrete action to take.
+        case .askUser, .retrieve, .generate, .unknown:
             await runChatPath(
                 trimmed: trimmed,
                 conversation: conversation,

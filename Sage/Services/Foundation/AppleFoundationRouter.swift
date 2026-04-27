@@ -155,18 +155,23 @@ final class AppleFoundationRouter: IntentRouter, @unchecked Sendable {
     init() {
         self.session = LanguageModelSession(
             instructions: """
-            You are Sage's intent router. Read the user's latest message \
-            and classify it into exactly one category:
-              • action   — the user wants Sage to perform a side-effecting \
-            task (create reminder, schedule event, draft message, run shortcut).
-              • retrieve — the user is asking about their own personal data \
-            (notes, photos, calendar, contacts, reminders).
-              • generate — open-ended request that needs no personal data.
-              • askUser  — the message is too ambiguous; you need a \
-            clarifying question.
-              • unknown  — none of the above with confidence ≥ 0.4.
+            You are Sage's intent router. Your ONLY job is to detect when \
+            the user is explicitly asking Sage to PERFORM an action with \
+            side effects.
 
-            Be conservative. Prefer `askUser` over guessing.
+            Emit kind=action ONLY when the user is unambiguously asking to:
+              • create or modify a reminder ("remind me…", "add reminder…")
+              • create or edit a calendar event ("schedule…", "add to calendar…")
+              • draft / send a message
+              • run a shortcut by name
+
+            For EVERYTHING ELSE — questions about the user's data, \
+            general chat, ambiguous phrasing, even "tell me more about X" \
+            — emit kind=retrieve. Sage's downstream chat path will look \
+            up the user's personal data and answer.
+
+            NEVER emit askUser. NEVER emit unknown. When in doubt, emit \
+            retrieve — Sage can ask for clarification itself if needed.
             """
         )
     }
@@ -186,8 +191,13 @@ final class AppleFoundationRouter: IntentRouter, @unchecked Sendable {
     }
 
     static func translate(_ out: FoundationRouterOutput) -> RouterDecision {
+        // sage-slim: only an explicit action with a real intent name
+        // short-circuits the chat path. Everything else (retrieve,
+        // generate, askUser, unknown) maps to .retrieve so the chat
+        // pipeline runs and the user gets a real answer instead of
+        // "could you tell me more?".
         switch out.kind {
-        case .action:
+        case .action where !out.actionIntent.isEmpty:
             return .action(ActionPlan(
                 intent: out.actionIntent,
                 parameters: [:],          // Phase 1 fills typed params
@@ -198,16 +208,14 @@ final class AppleFoundationRouter: IntentRouter, @unchecked Sendable {
                 query: out.retrievalQuery.isEmpty ? out.summary : out.retrievalQuery,
                 scope: []
             ))
-        case .generate:
-            return .generate(prompt: out.summary)
-        case .askUser:
-            return .askUser(question: out.clarification.isEmpty
-                ? "Could you give me a bit more detail?"
-                : out.clarification)
-        case .unknown:
-            return .unknown(reason: "router low confidence (\(out.confidence))")
+        case .generate, .action, .askUser, .unknown:
+            return .retrieve(RetrievalQuery(
+                query: out.retrievalQuery.isEmpty ? out.summary : out.retrievalQuery,
+                scope: []
+            ))
         }
     }
+
 }
 
 #endif
@@ -224,7 +232,7 @@ final class LLMServiceRouter: IntentRouter {
 
     /// `nonisolated` so callers from any actor can read it without an
     /// `await`; `let` keeps it trivially thread-safe.
-    nonisolated let implementationName = "Llama 3.2 3B (fallback)"
+    nonisolated let implementationName = "Qwen 2.5 3B (fallback)"
 
     private let llmService: LLMService
 
@@ -238,15 +246,25 @@ final class LLMServiceRouter: IntentRouter {
 
     @MainActor
     private func classifyOnMain(_ userInput: String, history: [String]) async -> RouterDecision {
-        // Without Apple FoundationModels we don't get @Generable. We
-        // ask the chat model for strict JSON and parse defensively —
-        // any malformed output falls back to .unknown rather than
-        // hallucinating a routing decision.
+        // Two-class router: action vs retrieve. The downstream chat
+        // path handles retrieval / generation / clarification itself,
+        // so we don't need finer-grained labels here. Anything that
+        // can't be parsed as a clean action falls through to retrieve
+        // — never askUser, never unknown.
         let systemPrompt = """
-        You are Sage's intent router. Output ONLY a single JSON object \
-        with the keys: kind (one of "action","retrieve","generate","askUser","unknown"), \
-        action_intent (string), retrieval_query (string), clarification (string), \
-        confidence (number 0–1). No prose, no markdown fences.
+        You decide whether the user wants Sage to PERFORM a side-effecting \
+        action. Output ONLY a single JSON object, no prose, no markdown:
+
+          {"kind":"action","action_intent":"<snake_case>","title":"<extracted>"}
+
+        OR
+
+          {"kind":"retrieve"}
+
+        Use kind=action ONLY for clear instructions: "remind me to…", \
+        "schedule a meeting…", "add to calendar…", "run my <name> shortcut". \
+        For everything else (questions, chit-chat, ambiguous input), use \
+        kind=retrieve. Never emit any other kind.
         """
 
         let historyBlock = history.suffix(6).joined(separator: "\n")
@@ -267,35 +285,31 @@ final class LLMServiceRouter: IntentRouter {
     }
 
     /// Permissive JSON extractor: pulls the first {...} block out of
-    /// whatever the 3B model produced. We only trust fields we can
-    /// validate; everything else falls to .unknown.
+    /// whatever the 3B model produced. The slim build defaults every
+    /// non-action outcome (parse failure, unknown kind, missing intent)
+    /// to .retrieve so the chat path always runs — it's the safe,
+    /// helpful default. The router NEVER decides "I can't help."
     static func parseJSON(_ raw: String) -> RouterDecision {
+        let fallback = RouterDecision.retrieve(RetrievalQuery(query: "", scope: []))
+
         guard let start = raw.firstIndex(of: "{"),
               let end   = raw.lastIndex(of: "}"),
               start < end,
               let data  = String(raw[start...end]).data(using: .utf8),
               let obj   = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
-            return .unknown(reason: "fallback router unparseable output")
+            return fallback
         }
 
-        let kind  = (obj["kind"] as? String)?.lowercased() ?? ""
-        let conf  = (obj["confidence"] as? Double) ?? 0.0
+        let kind   = (obj["kind"] as? String)?.lowercased() ?? ""
         let intent = (obj["action_intent"] as? String) ?? ""
-        let query  = (obj["retrieval_query"] as? String) ?? ""
-        let clar   = (obj["clarification"] as? String) ?? ""
 
-        switch kind {
-        case "action":
-            return .action(ActionPlan(intent: intent, parameters: [:], confidence: conf))
-        case "retrieve":
-            return .retrieve(RetrievalQuery(query: query, scope: []))
-        case "generate":
-            return .generate(prompt: query.isEmpty ? clar : query)
-        case "askuser":
-            return .askUser(question: clar.isEmpty ? "Could you tell me a bit more?" : clar)
-        default:
-            return .unknown(reason: "fallback router kind=\(kind) conf=\(conf)")
+        // Only the explicit action form short-circuits to the action path.
+        if kind == "action", !intent.isEmpty {
+            let title = (obj["title"] as? String) ?? ""
+            let params: [String: String] = title.isEmpty ? [:] : ["title": title]
+            return .action(ActionPlan(intent: intent, parameters: params, confidence: 0.7))
         }
+        return fallback
     }
 }
