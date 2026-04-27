@@ -42,35 +42,41 @@ struct CatalogModel: Identifiable, Hashable {
 
 // MARK: - ModelCatalog
 //
-// `sage-slim` ships with exactly one model: Qwen3-4B-Instruct (2507).
-// SmolVLM and the entire photo/vision stack have been removed from
-// this build — the goal is to nail the agent + retrieval + action
-// loop on a single, well-tested writer before adding modalities back.
+// `sage-slim` ships with exactly one model: Gemma 2 2B-Instruct.
+// SmolVLM and the entire photo/vision stack are gone — the goal is
+// to nail the agent + retrieval + action loop on a single, well-
+// tested writer before adding modalities back.
 //
-// Why Qwen3-4B-Instruct-2507-4bit:
-//   • Newer Qwen3 family — measurably stronger instruction following
-//     and tool-call discipline than the 2.5 series at similar size.
-//   • Text-only, mlx-lm compatible (NOT mlx-vlm) — drops cleanly into
-//     LLMService.loadModel without resurrecting the vision factory.
-//   • 256k native context window — the agent loop can hold many more
-//     retrieved chunks without our Phase-3 budget caps biting in.
-//   • 4-bit quantization, ~2.26 GB on disk. Sustained ~20 tok/s on
-//     A17 Pro / M-series GPUs.
-//   • Apache 2.0; mature mlx-community port (22k+ monthly downloads).
+// Why Gemma 2 2B-Instruct-4bit:
+//   • Text-only, mlx-lm compatible — drops cleanly into
+//     LLMService.loadModel via LLMModelFactory (Google's Gemma 3+ /
+//     Gemma 4 are unified multimodal, which would force us to
+//     resurrect MLXVLM and undo the slim work).
+//   • 2B params at 4-bit quantization is ~1.3 GB on disk and runs
+//     at >30 tok/s on A17 Pro — the smallest text-only Gemma we
+//     can ship.
+//   • Mature MLX port and well-understood EOS handling
+//     (LLMService injects `<end_of_turn>` for the Gemma family).
+//   • Permissive license; very strong instruction-following for size.
+//
+// Trade-off vs the prior Qwen 3 4B: smaller model, more reliant on
+// LiveContextProvider's pre-loaded date / events / reminders to stay
+// grounded. The grounding work shipped in the same commit is exactly
+// what makes the 2 B size class viable.
 
 enum ModelCatalog {
 
     static let chatModel = CatalogModel(
-        id: "mlx-community/Qwen3-4B-Instruct-2507-4bit",
-        displayName: "Qwen 3 · 4B",
-        family: "Qwen",
-        description: "Alibaba's Qwen 3 4B-Instruct (2507 release) — strong instruction following, 256k context, solid tool calling. Sage's primary brain.",
-        parameterCount: "4B",
-        sizeGB: 2.3,
-        contextLength: 262_144,
+        id: "mlx-community/gemma-2-2b-it-4bit",
+        displayName: "Gemma 2 · 2B",
+        family: "Gemma",
+        description: "Google's Gemma 2 2B-Instruct — fast, solid instruction following, text-only. Sage's primary brain, paired with live ground-truth grounding.",
+        parameterCount: "2B",
+        sizeGB: 1.3,
+        contextLength: 8_192,
         quantization: "4-bit",
-        tags: [.recommended, .capable, .reasoning],
-        minimumRAMGB: 6
+        tags: [.recommended, .fast, .compact],
+        minimumRAMGB: 4
     )
 
     /// Both-models compatibility shim. `sage-slim` ships only a chat

@@ -46,7 +46,14 @@ final class AgentLoop {
     //   • Tool results: ≤600 chars each
     //   • Reserve     : headroom for the model's own output tokens
     // Exceeding this pushes the KV cache past the Metal heap → SIGABRT.
-    private let maxBasePromptChars  = 1_500
+    // sage-slim: bumped from 1500 to 3500 because LiveContextProvider
+    // now injects today's date + the next 7 days of calendar events +
+    // pending reminders into the base prompt. That ground-truth block
+    // is the most important thing in the whole prompt — losing it to
+    // truncation is the difference between accurate answers and
+    // June-2024 hallucinations. Qwen 3 4B's 256k context easily
+    // absorbs the extra.
+    private let maxBasePromptChars  = 3_500
     private let maxHistoryTurns     = 6         // pairs = 12 messages
     private let maxToolResultChars  = 600
 

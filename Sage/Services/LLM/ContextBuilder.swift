@@ -38,6 +38,12 @@ final class ContextBuilder {
     private let searchEngine: SemanticSearchEngine
     private let tokenCounter: TokenCounter
     private let reranker: (any Reranker)?
+    /// sage-slim: pre-loads every turn with today's date + the user's
+    /// actual upcoming events + actual pending reminders. Eliminates
+    /// the small-model "today is June 2024" / "you have a meeting at
+    /// 3pm" hallucinations by handing the writer ground truth before
+    /// it can guess.
+    private let liveContext: LiveContextProvider
 
     // Token budgets sized for Llama 3.2 3B's 8k window.
     private let memoryTokenBudget  = 1_500
@@ -51,11 +57,13 @@ final class ContextBuilder {
     init(
         searchEngine: SemanticSearchEngine,
         tokenCounter: TokenCounter = .estimating,
-        reranker: (any Reranker)? = nil
+        reranker: (any Reranker)? = nil,
+        liveContext: LiveContextProvider = LiveContextProvider()
     ) {
         self.searchEngine = searchEngine
         self.tokenCounter = tokenCounter
         self.reranker     = reranker
+        self.liveContext  = liveContext
     }
 
     func buildContext(for query: String, history: [Message]) async -> InjectedContext {
@@ -71,7 +79,14 @@ final class ContextBuilder {
         }
 
         let fitted = await fitToTokenBudget(reranked)
-        let (instructions, sourceIDs) = buildSystemPrompt(chunks: fitted, history: history)
+        // sage-slim: live snapshot is fetched once per turn so each
+        // call to the writer sees fresh date / events / reminders.
+        let live = await liveContext.snapshot()
+        let (instructions, sourceIDs) = buildSystemPrompt(
+            chunks: fitted,
+            history: history,
+            liveSnapshot: live
+        )
         return InjectedContext(
             instructions: instructions,
             chunks: fitted,
@@ -127,7 +142,8 @@ final class ContextBuilder {
     /// source IDs in the order they appear (so `[c1]` ↔ sourceIDs[0]).
     private func buildSystemPrompt(
         chunks: [MemoryChunk],
-        history: [Message]
+        history: [Message],
+        liveSnapshot: String
     ) -> (prompt: String, sourceIDs: [String]) {
         var parts: [String] = []
 
@@ -145,6 +161,14 @@ final class ContextBuilder {
         All data is private and stays on-device — never mention cloud or external services.
         Be warm, concise, and specific. Reference personal context naturally when relevant.\(nameInstruction)
         """)
+
+        // sage-slim: ground-truth state goes in BEFORE the retrieval
+        // chunks so the writer sees it first, every turn. This is the
+        // single biggest hallucination fix we have — small models
+        // never need to guess the date or invent meetings again.
+        if !liveSnapshot.isEmpty {
+            parts.append(liveSnapshot)
+        }
 
         // ── Anti-hallucination access guard ────────────────────────
         // Small writers (Llama 3.2 3B fallback path) sometimes default
