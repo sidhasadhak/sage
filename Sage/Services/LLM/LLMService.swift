@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 import MLX
 import MLXLLM
 import MLXLMCommon
@@ -82,6 +85,7 @@ final class LLMService {
 
     init() {
         // Only evict GPU cache when fully idle — never during active computation.
+        #if canImport(UIKit)
         NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil,
@@ -94,6 +98,7 @@ final class LLMService {
                 MLX.Memory.cacheLimit = 0
             }
         }
+        #endif
     }
 
     var temperature: Float  = 0.7
